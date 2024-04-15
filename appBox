@@ -12,12 +12,12 @@ import pwd
 import select
 import signal
 import struct
+import subprocess
 import sys
 import termios
 import threading
 import time
 import tty
-import subprocess
 
 appLogger = logging.getLogger('appBox')
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -54,6 +54,7 @@ class SettingsManager():
         _settings = {
              'apptainer_cmd': SettingsManager.get_singularity_cmd(),
              'bind_mount_paths': SettingsManager.get_default_bind_mounts(),
+             'copy_from_host': ['LC_ALL', 'LANG', 'LANGUAGE', 'PS1'],
              'default_fuse_lib_preload': SettingsManager.get_cvmfs_fuse(),
              'default_image_wrk_path': SettingsManager.get_default_scratch(),
              'default_img': 'docker://centos:centos7',
@@ -143,6 +144,14 @@ class SettingsManager():
                 for wrk_folder in [('TMPDIR', 'TMP'), ('CACHEDIR', 'CACHE'), ('PULLFOLDER', 'PULL')]:
                     CMD_ENV[app_env + 'APPTAINER_' + wrk_folder[0]]=os.path.join(CMD_ENV['SCRATCH_ROOT'],wrk_folder[1])
                 CMD_ENV[app_env + 'BIND']=SettingsManager.get_bind_paths()
+
+            for host_env_var in SettingsManager.get_settings()['copy_from_host']:
+                host_env = os.environ
+                if host_env_var in host_env:
+                    for app_env in ['', 'APPTAINERENV_', 'APPTAINERENV_APPTAINERENV_']:
+                        CMD_ENV[app_env + host_env_var] = host_env[host_env_var]
+                else:
+                    appLogger.debug('Ignoring env var "{}" as not found on "host"'.format(host_env_var))
 
         return CMD_ENV
 
@@ -368,23 +377,41 @@ class SandboxInstaller():
         activate_script = '#!/bin/bash\n'
 
         for subpath in SettingsManager.get_settings()['bind_mount_paths']:
-            local_path= './'+subpath
-            activate_script += 'mkdir -p '+os.path.join(install_path, subpath) + '\n'
+            local_path= subpath
+            activate_script += 'mkdir -p ' + os.path.abspath(os.path.join(install_path, '.'+subpath)) + '\n'
 
-        apptainer_shell_cmd  = '\n'
+        activate_script += '\n'
 
-        apptainer_shell_cmd += SettingsManager.get_app_scriptEnv()
+        activate_script += SettingsManager.get_app_scriptEnv()
 
-        apptainer_shell_cmd += '\n'
-        apptainer_shell_cmd += 'unset LD_PRELOAD\n'
-        apptainer_shell_cmd += 'export APPTAINERENV_PS1=$PS1\n'
+        activate_script += '\n'
+        activate_script += 'unset LD_PRELOAD\n'
+        activate_script += '\n'
+
+        activate_script += 'function arg_merge() {\n'
+        activate_script += '  delim=";"      # join delimiter\n'
+        activate_script += '  oldIFS=$IFS   # save IFS, the field separator\n'
+        activate_script += '  IFS=$delim\n'
+        activate_script += '  result="$*"\n'
+        activate_script += '  IFS=$oldIFS   # restore IFS\n'
+        activate_script += '  echo $result\n'
+        activate_script += '}\n\n'
 
         if as_root:
-            apptainer_shell_cmd += SettingsManager.get_settings()['apptainer_cmd'] + ' exec -w -f '+install_path+' /bin/bash \n'
+            apptainer_shell_cmd = SettingsManager.get_settings()['apptainer_cmd'] + ' exec -w -f '+install_path+' /bin/bash'
         else:
-            apptainer_shell_cmd += SettingsManager.get_settings()['apptainer_cmd'] + ' exec -w '+install_path+' /bin/bash \n'
+            apptainer_shell_cmd = SettingsManager.get_settings()['apptainer_cmd'] + ' exec -w '+install_path+' /bin/bash'
 
-        activate_script += apptainer_shell_cmd
+        #activate_script += apptainer_shell_cmd
+
+        which_cmd  = "if [[ $# -eq 0 ]]; then\n"
+        which_cmd += apptainer_shell_cmd + '\n'
+        which_cmd += "else\n"
+        which_cmd += 'argz=$(arg_merge "$@")\n'
+        which_cmd += apptainer_shell_cmd + ' -c "$argz";\n'
+        which_cmd += 'fi\n'
+
+        activate_script += which_cmd
 
         return activate_script
 
@@ -681,7 +708,7 @@ if __name__ == '__main__':
         appBoxManager.header()
 
     if parsed_args.debug:
-        appLogger.info('Debugging Enabled, Jolan tru.')
+        appLogger.info('Debugging Enabled. Jolan tru.')
         logging.basicConfig(level=logging.DEBUG, format='%(message)s')
 
     if False:
@@ -695,12 +722,17 @@ if __name__ == '__main__':
 
         appBoxManager.create_new_appenv(this_path, this_image, parsed_args.debug)
 
+        if parsed_args.run_command or parsed_args.run_command_root:
+            logger.error('NOT YET IMPLEMENTED')
+            sys.exit(99)
+
         if parsed_args.run_after:
             _user_cmd = 'source '+os.path.join(parsed_args.install_path, 'bin/activate\n')
             appBoxManager.start_interactive(_user_cmd)
         elif parsed_args.run_after_root:
             _root_cmd = 'source '+os.path.join(parsed_args.install_path, 'bin/activate-asroot\n')
             appBoxManager.start_interactive(_root_cmd)
+
 
     sys.exit(0)
 
