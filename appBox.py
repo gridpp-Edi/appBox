@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 import argparse
@@ -8,6 +8,7 @@ import logging
 import os
 import pprint
 import pty
+import pwd
 import select
 import signal
 import struct
@@ -16,15 +17,34 @@ import termios
 import threading
 import time
 import tty
-from subprocess import Popen
+import subprocess
 
 appLogger = logging.getLogger('appBox')
 logging.basicConfig(level=logging.INFO, format='%(message)s')
+
+def getUN():
+    return pwd.getpwuid(os.getuid())[0]
 
 
 class SettingsManager():
 
     settings = None
+
+    def get_default_bind_mounts():
+
+        bind_mount_paths = ['/cvmfs','/scratch', '/localdisk', '/Data', '/mnt', '/exports']
+
+        found_paths = []
+
+        for subpath in bind_mount_paths:
+            if not os.path.exists(subpath):
+                appLogger.warning('PATH: {} not found so won\'t attempt to mount into contaier.'.format(subpath))
+                continue
+
+            found_paths.append(subpath)
+
+        return found_paths
+
 
     def get_settings():
 
@@ -33,27 +53,34 @@ class SettingsManager():
 
         _settings = {
              'apptainer_cmd': SettingsManager.get_singularity_cmd(),
-             'bind_mount_paths': ['/cvmfs','/scratch','/localdisk', '/Data'],
+             'bind_mount_paths': SettingsManager.get_default_bind_mounts(),
              'default_fuse_lib_preload': SettingsManager.get_cvmfs_fuse(),
              'default_image_wrk_path': SettingsManager.get_default_scratch(),
-             'default_img': '"docker://centos:centos7"',
+             'default_img': 'docker://centos:centos7',
              'default_mappings': {
-                                   'CO6':      '"docker://centos:centos6"',
-                                   'CO7':      '"docker://centos:centos7"',
-                                   'SL7':      '"docker://centos:centos7"',
-                                   'EL7':      '"docker://centos:centos7"',
-                                   'CO8':      '"docker://almalinux:8"',
-                                   'EL8':      '"docker://almalinux:8"',
-                                   'Alma8':    '"docker://almalinux:8"',
-                                   'EL9':      '"docker://almalinux:9"',
-                                   'Alma9':    '"docker://almalinux:9"',
-                                   'Rocky8':   '"docker://rockylinux:8"',
-                                   'Rocky9':   '"docker://rockylinux:9"',
-                                   'Ubuntu':   '"docker://ubuntu:22.04"',
-                                   'Ubuntu22': '"docker://ubuntu:22.04"',
-                                   'Ubuntu20': '"docker://ubuntu:20.04"',
+                                   'CO6':      'docker://centos:centos6',
+                                   'CO7':      'docker://centos:centos7',
+                                   'SL7':      'docker://centos:centos7',
+                                   'EL7':      'docker://centos:centos7',
+                                   'CO8':      'docker://almalinux:8',
+                                   'EL8':      'docker://almalinux:8',
+                                   'Alma8':    'docker://almalinux:8',
+                                   'EL9':      'docker://almalinux:9',
+                                   'Alma9':    'docker://almalinux:9',
+                                   'Rocky8':   'docker://rockylinux:8',
+                                   'Rocky9':   'docker://rockylinux:9',
+                                   'Ubuntu':   'docker://ubuntu:22.04',
+                                   'Ubuntu22': 'docker://ubuntu:22.04',
+                                   'Ubuntu20': 'docker://ubuntu:20.04',
+                                   'TF216':    'docker://tensorflow/tensorflow:2.16.1-gpu-jupyter',
+                                   'TF215':    'docker://tensorflow/tensorflow:2.15.0-gpu-jupyter',
+                                   'TF214':    'docker://tensorflow/tensorflow:2.14.0-gpu-jupyter',
+                                   'PyTorch22CUDA12': 'docker://pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime',
+                                   'PyTorch22CUDA11': 'docker://pytorch/pytorch:2.2.2-cuda11.8-cudnn8-runtime',
+                                   'PyTorch21CUDA12': 'docker://pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime',
+                                   'PyTorch21CUDA11': 'docker://pytorch/pytorch:2.2.2-cuda11.8-cudnn8-runtime',
                                  },
-             'default_sandbox_path': os.path.join(SettingsManager.get_default_scratch(), 'CO7'),
+             'default_sandbox_path': os.path.join(SettingsManager.get_default_scratch(), 'appBox'),
              'exec_as_root_by_default': False,
              'interactive_command': ['/bin/bash', '-i'],
              'timeout': 0.05,
@@ -64,7 +91,10 @@ class SettingsManager():
         return SettingsManager.settings
 
     def get_default_scratch():
-        default_scratch_path = os.path.join('/scratch', 'apptainer_'+str(os.getuid()))
+        if os.path.exists('/scratch'):
+            default_scratch_path = os.path.join('/scratch', 'appBox_'+str(getUN()))
+        else:
+            default_scratch_path = os.path.join('/tmp', 'appBox_'+str(getUN()))
         return default_scratch_path
 
     def get_cvmfs_fuse():
@@ -165,7 +195,7 @@ class NormalSubShell():
     def _launch_shell(self):
 
         # use os.setsid() make it run in a new process group, or bash job control will not be enabled
-        self.p = Popen(SettingsManager.get_settings()['interactive_command'],
+        self.p = subprocess.Popen(SettingsManager.get_settings()['interactive_command'],
                       preexec_fn=os.setsid,
                       stdin=self.stdout_s,
                       stdout=self.stdout_s,
@@ -183,8 +213,6 @@ class NormalSubShell():
         readable = [self.stdout_m, ]
 
         full_cmd = ''
-
-        i=0
 
         for cmd in queued_cmds:
 
@@ -307,6 +335,32 @@ class InteractiveShell(threading.Thread, NormalSubShell):
             self.running = False
             self._cleanup()
 
+
+class RunCommand():
+
+    def runCommand(thisCmd):
+
+        if type(thisCmd) is list:
+            _cmd = ' '.merge(thisCmd)
+        else:
+            _cmd = thisCmd
+
+        _cmd = _cmd + " ; exit $?"
+        full_cmd = ['bash', '-c', "{}".format(_cmd)]
+
+        try:
+            result = subprocess.run(full_cmd, stdout = subprocess.PIPE,
+                                              stderr = subprocess.DEVNULL)
+
+            stdout = result.stdout.decode()
+            returncode = result.returncode
+        except:
+            stdout = ''
+            returncode = -99
+
+        return stdout, returncode
+
+
 class SandboxInstaller():
 
     def build_launch_script(install_path, as_root):
@@ -372,11 +426,74 @@ class SandboxInstaller():
             if not os.path.exists(wrk_path):
                 os.makedirs(wrk_path)
 
-    def pullImage(install_image):
+    def checkImgStorage(install_image):
 
-        appLogger.info('Pulling Image: {}'.format(install_image))
+        #docker inspect -f "{{ .Size }}" 
 
-        shell = NormalSubShell(quiet=True)
+        install_image_ver = install_image.split(':')[-1]
+        install_image_name = install_image.split(':')[-2][2:]
+
+        try:
+            img_url = "https://hub.docker.com/v2/repositories/{}/tags/{}".format(install_image_name, install_image_ver)
+            appLogger.debug('Checking URL: {}'.format(img_url))
+            image_size, rc = RunCommand.runCommand("curl -s {} | jq '.full_size'".format(img_url))
+            if rc != 0:
+                img_url = "https://hub.docker.com/v2/repositories/library/{}/tags/{}".format(install_image_name, install_image_ver)
+                appLogger.debug('Checking URL: {}'.format(img_url))
+                image_size, rc = RunCommand.runCommand("curl -s {} | jq '.full_size'".format(img_url))
+
+            image_size = int(image_size.strip())
+        except:
+            image_size = -1
+
+        appLogger.debug('Image size: {} bytes'.format(image_size))
+
+        total_free_space = 0
+
+        for i in ['TMP','CACHE','PULL']:
+
+            subpath = os.path.join(SettingsManager.get_app_env()['SCRATCH_ROOT'], i)
+
+            partition_data = os.statvfs(subpath)
+            free_space = partition_data.f_bavail * partition_data.f_frsize
+
+            appLogger.debug('Looking at Path: {}'.format(subpath))
+            appLogger.debug('Found Free Space: {} bytes'.format(free_space))
+
+            total_free_space = total_free_space + free_space
+
+        if image_size>0 and total_free_space<(image_size*3):
+
+            appLogger.error('Insufficient Space to extract image: {}'.format(install_image))
+            raise Exception('Not Enough space to downlaod and extract image')
+        
+        appLogger.debug('Space < 3 * ImageSize')
+
+        return (image_size, total_free_space)
+
+
+    def checkPathCapacity(install_path, image_size):
+
+        partition_data = os.statvfs(install_path)
+
+        free_space = partition_data.f_bavail * partition_data.f_frsize
+
+        appLogger.debug('Free Space found: {} bytes'.format(free_space))
+        appLogger.debug('Free Space needed: {} bytes'.format(image_size))
+
+        if free_space < (image_size + 10*1024*1024):
+
+            appLogger.error('Not enough space to install.')
+            raise Exception('Not enough space at: "{}" to extract image for "installation".'.format(install_path))
+
+
+    def pullImage(install_image, debug):
+
+        image_size, total_free_space = SandboxInstaller.checkImgStorage(install_image)
+
+        appLogger.info('Pulling Image: "{}"'.format(install_image))
+
+        shell = NormalSubShell(quiet=not debug)
 
         apptainer = SettingsManager.get_settings()['apptainer_cmd']
 
@@ -389,15 +506,18 @@ class SandboxInstaller():
 
         del shell
 
-    def buildSandbox(install_path, install_image):
+        return image_size
+
+
+    def buildSandbox(install_path, install_image, image_size, debug):
+
+        SandboxInstaller.checkPathCapacity(install_path, image_size)
 
         appLogger.info('Building Sandbox at: "{}"'.format(install_path))
 
-        shell = NormalSubShell(quiet=True)
+        shell = NormalSubShell(quiet=not debug)
 
         apptainer = SettingsManager.get_settings()['apptainer_cmd']
-
-        SandboxInstaller.build_singularity_env(install_path)
 
         cmd_queue  = [SettingsManager.get_app_scriptEnv(), ]
         cmd_queue += [SettingsManager.get_settings()['default_fuse_lib_preload'], ]
@@ -421,21 +541,37 @@ class SandboxInstaller():
             if not os.path.exists(bind_folder):
                 os.makedirs(bind_folder)
 
+        app_conf_path = os.path.join(install_path, './etc/apt/apt.conf.d/')
+
+        if os.path.exists(app_conf_path):
+
+            fix_apt  = 'APT::Sandbox::User "root";\nAPT::Sandbox::Verify "0";\n'
+            fix_apt += 'APT::Sandbox::Verify::IDs "0";\nAPT::Sandbox::Verify::Groups "0";\n'
+            fix_apt += 'APT::Sandbox::Verify::Regain "0";'
+
+            with open(os.path.join(app_conf_path, 'sandbox-disable')) as _file:
+                _file.write(fix_apt)
+
+
         SandboxInstaller.build_activate_scripts(install_path)
 
 
 class appBoxManager():
 
-    def create_new_appenv(install_path, install_image):
+    def create_new_appenv(install_path, install_image, debug):
 
         if os.path.exists(install_path):
+            appLogger.info('Found Container at "{}", skipping.'.format(install_path))
             return
 
         appLogger.info('appBox Apptainer Sandbox Installer')
 
-        SandboxInstaller.pullImage(install_image)
+        # Needed for CACHE/TMP folders
+        SandboxInstaller.build_singularity_env(install_path)
 
-        SandboxInstaller.buildSandbox(install_path, install_image)
+        image_size = SandboxInstaller.pullImage(install_image, debug)
+
+        SandboxInstaller.buildSandbox(install_path, install_image, image_size, debug)
 
         SandboxInstaller.fixupSandbox(install_path)
 
@@ -526,6 +662,9 @@ class appBoxManager():
         parser.add_argument('-q', '--quiet', action='store_true',
                             help='Quiet')
 
+        parser.add_argument('-d', '--debug', action='store_true',
+                            help='Debugging on.')
+
         return parser
 
 
@@ -542,6 +681,10 @@ if __name__ == '__main__':
     if not parsed_args.quiet:
         appBoxManager.header()
 
+    if parsed_args.debug:
+        appLogger.info('Debugging Enabled, Jolan tru.')
+        logging.basicConfig(level=logging.DEBUG, format='%(message)s')
+
     if False:
         appBoxManager.start_interactive()
 
@@ -551,7 +694,7 @@ if __name__ == '__main__':
 
         this_path = os.path.abspath(parsed_args.install_path)
 
-        appBoxManager.create_new_appenv(this_path, this_image)
+        appBoxManager.create_new_appenv(this_path, this_image, parsed_args.debug)
 
         if parsed_args.run_after:
             _user_cmd = 'source '+os.path.join(parsed_args.install_path, 'bin/activate\n')
