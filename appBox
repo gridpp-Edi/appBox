@@ -549,9 +549,8 @@ class SandboxInstaller():
             fix_apt += 'APT::Sandbox::Verify::IDs "0";\nAPT::Sandbox::Verify::Groups "0";\n'
             fix_apt += 'APT::Sandbox::Verify::Regain "0";'
 
-            with open(os.path.join(app_conf_path, 'sandbox-disable')) as _file:
+            with open(os.path.join(app_conf_path, 'sandbox-disable'), 'w+') as _file:
                 _file.write(fix_apt)
-
 
         SandboxInstaller.build_activate_scripts(install_path)
 
