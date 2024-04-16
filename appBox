@@ -19,8 +19,9 @@ import threading
 import time
 import tty
 
-appLogger = logging.getLogger('appBox')
-logging.basicConfig(level=logging.INFO, format='%(message)s')
+appLogger = None
+
+APPBOX_ENV = 'APPBOX_SETTINGS'
 
 def getUN():
     return pwd.getpwuid(os.getuid())[0]
@@ -38,13 +39,23 @@ class SettingsManager():
 
         for subpath in bind_mount_paths:
             if not os.path.exists(subpath):
-                appLogger.warning('PATH: {} not found so won\'t attempt to mount into contaier.'.format(subpath))
+                if appLogger:
+                    appLogger.debug('PATH: {} not found so won\'t attempt to mount into contaier.'.format(subpath))
                 continue
 
             found_paths.append(subpath)
 
         return found_paths
 
+    def load_env_settings():
+
+        appbox_env_file = os.environ.get(APPBOX_ENV, '')
+
+        if appbox_env_file:
+            if os.path.exits(appbox_env_file):
+                with open(appbox_env_file, 'r') as _settings:
+                    return json.load(_settings)
+        return {}
 
     def get_settings():
 
@@ -86,6 +97,12 @@ class SettingsManager():
              'interactive_command': ['/bin/bash', '-i'],
              'timeout': 0.05,
             }
+
+        json_settings = SettingsManager.load_env_settings()
+
+        for k, v in _settings.items():
+            if k in json_settings.keys():
+                _settings[k] = json_settings[k]
 
         SettingsManager.settings = _settings
 
@@ -175,8 +192,22 @@ class SettingsManager():
 
         return img_map.get(img_str, img_str)
 
+
+class NonSubShell():
+
+    def run_command(this_cmd):
+
+        full_cmd = ['bash', '-c', this_cmd]
+
+        with subprocess.Popen(full_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as process:
+            for line in process.stdout:
+                appLogger.error(line.decode('utf8').rstrip())
+
+        return process.returncode
+
+
 class NormalSubShell():
-    def __init__(self, quiet):
+    def __init__(self, quiet, exit_rc=True):
 
         self.p = None        
         self.quiet = quiet
@@ -223,6 +254,8 @@ class NormalSubShell():
 
         full_cmd = ''
 
+        if type(queued_cmds) is str:
+            queued_cmds = [queued_cmds,]
         for cmd in queued_cmds:
 
             if type(cmd) is not str:
@@ -239,10 +272,10 @@ class NormalSubShell():
 
         full_cmd = full_cmd.replace('\n', ' && ')
 
-        if ignore_history:
+        if ignore_history and self.quiet:
             full_cmd = 'set +o history; unset HISTFILE; ' + full_cmd
 
-        full_cmd += ' ; exit $? \n'
+        full_cmd += ' ; exit $? 2> /dev/null\n'
 
         os.write(self.stdout_m, full_cmd.encode())
 
@@ -260,7 +293,7 @@ class NormalSubShell():
     def _shell_fwd_bck(self, readable):
 
         if self.p and self.p.poll() is None:
-            
+
             r, w, e = select.select(readable, [], [], SettingsManager.get_settings()['timeout'])
 
             for _in in r:
@@ -300,6 +333,7 @@ class NormalSubShell():
         sys.stdout.flush()
 
 class InteractiveShell(threading.Thread, NormalSubShell):
+
     def __init__(self):
         threading.Thread.__init__(self)
         NormalSubShell.__init__(self, False)
@@ -371,6 +405,16 @@ class RunCommand():
 
 
 class SandboxInstaller():
+            
+    def loadSingularityJSON(install_path):
+
+        json_path = os.path.join(install_path, '.singularity.d/labels.json')
+
+        with open(json_path, 'r') as _jsonfile:
+
+            json_data = json.load(_jsonfile)
+
+        return json_data
 
     def build_launch_script(install_path, as_root):
 
@@ -458,7 +502,11 @@ class SandboxInstaller():
         #docker inspect -f "{{ .Size }}" 
 
         install_image_ver = install_image.split(':')[-1]
-        install_image_name = install_image.split(':')[-2][2:]
+        try:
+            install_image_name = install_image.split(':')[-2][2:]
+        except:
+            logger.error('Image Name malformed')
+            sys.exit(11)
 
         try:
             img_url = "https://hub.docker.com/v2/repositories/{}/tags/{}".format(install_image_name, install_image_ver)
@@ -568,6 +616,16 @@ class SandboxInstaller():
             if not os.path.exists(bind_folder):
                 os.makedirs(bind_folder)
 
+        for _file in ['etc/hosts', 'etc/localtime', 'etc/resolv.conf', 'etc/passwd', 'etc/group']:
+            touch_file = os.path.join(install_path, _file)
+            if not os.path.exists(touch_file):
+                with open(touch_file, 'a'):
+                    os.utime(touch_file, None)
+        for _folder in ['dev', 'proc', 'sys', 'tmp', 'var/tmp']:
+            folder_path = os.path.join(install_path, _folder)
+            if not os.path.exists(folder_path):
+                os.makedirs(folder_path)
+
         app_conf_path = os.path.join(install_path, './etc/apt/apt.conf.d/')
 
         if os.path.exists(app_conf_path):
@@ -587,7 +645,14 @@ class appBoxManager():
     def create_new_appenv(install_path, install_image, debug):
 
         if os.path.exists(install_path):
-            appLogger.info('Found Container at "{}", skipping.'.format(install_path))
+            appLogger.debug('Found Container at "{}", skipping install.'.format(install_path))
+            try:
+                json_data = SandboxInstaller.loadSingularityJSON(install_path)
+                container_label = json_data['org.label-schema.usage.singularity.deffile.bootstrap']+'://'+json_data['org.label-schema.usage.singularity.deffile.from']
+                appLogger.info('Image {}, found in container {}'.format(container_label, install_path))
+            except:
+                appLogger.error('Container at: "{}" malformed'.format(install_path))
+                sys.exit(10)
             return
 
         appLogger.info('appBox Apptainer Sandbox Installer')
@@ -609,14 +674,14 @@ class appBoxManager():
 
     def header():
 
-        print('                                                            ')
-        print('░░      ░░░       ░░░       ░░░       ░░░░      ░░░  ░░░░  ░')
-        print('▒  ▒▒▒▒  ▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒  ▒▒▒  ▒▒  ▒▒')
-        print('▓  ▓▓▓▓  ▓▓       ▓▓▓       ▓▓▓       ▓▓▓  ▓▓▓▓  ▓▓▓▓    ▓▓▓')
-        print('█        ██  ████████  ████████  ████  ██  ████  ███  ██  ██')
-        print('█  ████  ██  ████████  ████████       ████      ███  ████  █')
-        print('████████████████████████████████████████████████████████████')
-        print('')
+        appLogger.info('                                                            ')
+        appLogger.info('░░      ░░░       ░░░       ░░░       ░░░░      ░░░  ░░░░  ░')
+        appLogger.info('▒  ▒▒▒▒  ▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒  ▒▒▒  ▒▒  ▒▒')
+        appLogger.info('▓  ▓▓▓▓  ▓▓       ▓▓▓       ▓▓▓       ▓▓▓  ▓▓▓▓  ▓▓▓▓    ▓▓▓')
+        appLogger.info('█        ██  ████████  ████████  ████  ██  ████  ███  ██  ██')
+        appLogger.info('█  ████  ██  ████████  ████████       ████      ███  ████  █')
+        appLogger.info('████████████████████████████████████████████████████████████')
+        appLogger.info('')
 
     def start_interactive(custom_cmd=None):
 
@@ -691,6 +756,12 @@ class appBoxManager():
         parser.add_argument('-d', '--debug', action='store_true',
                             help='Debugging on.')
 
+        parser.add_argument('-ds', '--dump-settings', action='store_true',
+                            help='Dump settings used by this instance.')
+
+        parser.add_argument('-l', '--launch',
+                            help='Launch Interactive environment from ...')
+
         return parser
 
 
@@ -704,12 +775,31 @@ if __name__ == '__main__':
         pprint.pprint(SettingsManager.get_settings()['default_mappings'])
         sys.exit(0)
 
-    if not parsed_args.quiet:
-        appBoxManager.header()
+    if parsed_args.dump_settings:
 
-    if parsed_args.debug:
-        appLogger.info('Debugging Enabled. Jolan tru.')
-        logging.basicConfig(level=logging.DEBUG, format='%(message)s')
+        all_settings = SettingsManager.get_settings() 
+        pprint.pprint(all_settings)
+        sys.exit(0)
+
+    def setLogLevel(level):
+
+        global appLogger
+        appLogger = logging.getLogger('appBox')
+
+        logging.basicConfig(level=level, format='%(message)s')
+        appLogger.setLevel(level)
+        for handler in appLogger.handlers:
+            handler.setLevel(level)
+
+    if parsed_args.quiet:
+        setLogLevel(logging.ERROR)
+    elif parsed_args.debug:
+        setLogLevel(logging.DEBUG)
+    else:
+        setLogLevel(logging.INFO)
+
+    appLogger.debug('Debugging Enabled. Jolan tru.')
+    appBoxManager.header()
 
     if False:
         appBoxManager.start_interactive()
@@ -722,17 +812,24 @@ if __name__ == '__main__':
 
         appBoxManager.create_new_appenv(this_path, this_image, parsed_args.debug)
 
-        if parsed_args.run_command or parsed_args.run_command_root:
-            logger.error('NOT YET IMPLEMENTED')
-            sys.exit(99)
-
-        if parsed_args.run_after:
-            _user_cmd = 'source '+os.path.join(parsed_args.install_path, 'bin/activate\n')
-            appBoxManager.start_interactive(_user_cmd)
-        elif parsed_args.run_after_root:
-            _root_cmd = 'source '+os.path.join(parsed_args.install_path, 'bin/activate-asroot\n')
-            appBoxManager.start_interactive(_root_cmd)
-
+        if parsed_args.run_after or parsed_args.run_command:
+            _user_cmd = 'source '+os.path.join(parsed_args.install_path, 'bin/activate')
+            if parsed_args.run_command:
+                _user_cmd = _user_cmd + ' "' + parsed_args.run_command.replace('"','\\"').replace('\'','\\\'') + '"\n'
+                rc = NonSubShell.run_command(_user_cmd)
+                sys.exit(rc)
+            else:
+                _user_cmd = _user_cmd + '\n'
+                appBoxManager.start_interactive(_user_cmd)
+        elif parsed_args.run_after_root or parsed_args.run_command_root:
+            _root_cmd = 'source '+os.path.join(parsed_args.install_path, 'bin/activate-asroot')
+            if parsed_args.run_command_root:
+                _root_cmd = _root_cmd + ' "' + parsed_args.run_command_root.replace('"','\\"').replace('\'','\\\'') + '"\n'
+                rc = NonSubShell.run_command(_root_cmd)
+                sys.exit(rc)
+            else:
+                _root_cmd = _root_cmd + '\n'
+                appBoxManager.start_interactive(_root_cmd)
 
     sys.exit(0)
 
