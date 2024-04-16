@@ -762,6 +762,9 @@ class appBoxManager():
         parser.add_argument('-l', '--launch',
                             help='Launch Interactive environment from ...')
 
+        parser.add_argument('-lr', '--launch-root',
+                            help='Launch Interactive environment AS ROOT, from ...')
+
         return parser
 
 
@@ -801,35 +804,48 @@ if __name__ == '__main__':
     appLogger.debug('Debugging Enabled. Jolan tru.')
     appBoxManager.header()
 
-    if False:
-        appBoxManager.start_interactive()
+    if parsed_args.launch or parsed_args.launch_root:
 
-    else:
+        install_path = parsed_args.launch or parsed_args.launch_root
+        try:
+            json_data = SandboxInstaller.loadSingularityJSON(install_path)
+            container_label = json_data['org.label-schema.usage.singularity.deffile.bootstrap']+'://'+json_data['org.label-schema.usage.singularity.deffile.from']
+            appLogger.debug('Launching "{}" from "{}"'.format(container_label, parsed_args.launch))
+        except:
+            pass
 
-        this_image = SettingsManager.get_this_image(parsed_args.install_image)
+        _launch_cmd = 'source '+os.path.join(parsed_args.launch, 'bin/activate')
+        if parsed_args.launch_root:
+            _launch_cmd = _launch_cmd + '-asroot';
+        _launch_cmd = _launch_cmd + ';\n'
 
-        this_path = os.path.abspath(parsed_args.install_path)
+        appBoxManager.start_interactive(_launch_cmd)
+        sys.exit(0)
 
-        appBoxManager.create_new_appenv(this_path, this_image, parsed_args.debug)
+    this_image = SettingsManager.get_this_image(parsed_args.install_image)
 
-        if parsed_args.run_after or parsed_args.run_command:
-            _user_cmd = 'source '+os.path.join(parsed_args.install_path, 'bin/activate')
-            if parsed_args.run_command:
-                _user_cmd = _user_cmd + ' "' + parsed_args.run_command.replace('"','\\"').replace('\'','\\\'') + '"\n'
-                rc = NonSubShell.run_command(_user_cmd)
-                sys.exit(rc)
-            else:
-                _user_cmd = _user_cmd + '\n'
-                appBoxManager.start_interactive(_user_cmd)
-        elif parsed_args.run_after_root or parsed_args.run_command_root:
-            _root_cmd = 'source '+os.path.join(parsed_args.install_path, 'bin/activate-asroot')
-            if parsed_args.run_command_root:
-                _root_cmd = _root_cmd + ' "' + parsed_args.run_command_root.replace('"','\\"').replace('\'','\\\'') + '"\n'
-                rc = NonSubShell.run_command(_root_cmd)
-                sys.exit(rc)
-            else:
-                _root_cmd = _root_cmd + '\n'
-                appBoxManager.start_interactive(_root_cmd)
+    this_path = os.path.abspath(parsed_args.install_path)
+
+    appBoxManager.create_new_appenv(this_path, this_image, parsed_args.debug)
+
+    if parsed_args.run_after or parsed_args.run_command:
+        _user_cmd = 'source '+os.path.join(parsed_args.install_path, 'bin/activate')
+        if parsed_args.run_command:
+            _user_cmd = _user_cmd + ' "' + parsed_args.run_command.replace('"','\\"').replace('\'','\\\'') + '"\n'
+            rc = NonSubShell.run_command(_user_cmd)
+            sys.exit(rc)
+        else:
+            _user_cmd = _user_cmd + '\n'
+            appBoxManager.start_interactive(_user_cmd)
+    elif parsed_args.run_after_root or parsed_args.run_command_root:
+        _root_cmd = 'source '+os.path.join(parsed_args.install_path, 'bin/activate-asroot')
+        if parsed_args.run_command_root:
+            _root_cmd = _root_cmd + ' "' + parsed_args.run_command_root.replace('"','\\"').replace('\'','\\\'') + '"\n'
+            rc = NonSubShell.run_command(_root_cmd)
+            sys.exit(rc)
+        else:
+            _root_cmd = _root_cmd + '\n'
+            appBoxManager.start_interactive(_root_cmd)
 
     sys.exit(0)
 
