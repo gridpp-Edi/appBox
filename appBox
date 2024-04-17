@@ -479,7 +479,7 @@ class InteractiveShell(threading.Thread, NormalSubShell):
 
 class RunCommand():
     '''
-
+    Run a command in a 'clean' bash shell.
     '''
 
     def runCommand(thisCmd):
@@ -493,7 +493,7 @@ class RunCommand():
             _cmd = thisCmd
 
         _cmd = _cmd + " ; exit $?"
-        full_cmd = ['bash', '-c', "{}".format(_cmd)]
+        full_cmd = ['bash', '-l', '-c', "{}".format(_cmd)]
 
         try:
             result = subprocess.run(full_cmd, stdout = subprocess.PIPE,
@@ -509,8 +509,14 @@ class RunCommand():
 
 
 class SandboxInstaller():
+    '''
+    Class for installing a sandbox from a given image
+    '''
             
     def loadSingularityJSON(install_path):
+        '''
+        Lets look at a given sandbox we have found on disk
+        '''
 
         json_path = os.path.join(install_path, '.singularity.d/labels.json')
 
@@ -521,6 +527,9 @@ class SandboxInstaller():
         return json_data
 
     def build_launch_script(install_path, as_root):
+        '''
+        This method does the heavy lifting of building the activate scripts
+        '''
 
         activate_script = '#!/bin/bash\n'
 
@@ -562,6 +571,9 @@ class SandboxInstaller():
         return activate_script
 
     def build_activate_scripts(install_path):
+        '''
+        Build the 'activate' and 'activate-asroot' scripts which allow a user to trivially enter the sandbox
+        '''
 
         bin_dir = os.path.join(install_path, 'bin')
 
@@ -585,6 +597,9 @@ class SandboxInstaller():
         _build_script(as_root=True)
 
     def build_singularity_env(root=None):
+        '''
+        This builds the on-disk env needed to pull an image or build a sandbox
+        '''
 
         if not root:
             root = os.path.dirname(SettingsManager.get_settings()['default_sandbox_path'])
@@ -600,6 +615,9 @@ class SandboxInstaller():
                 os.makedirs(wrk_path)
 
     def checkImgStorage(install_image):
+        '''
+        This function grabs the image size from dockerhub using different API as needed
+        '''
 
         #docker inspect -f "{{ .Size }}" 
 
@@ -650,6 +668,9 @@ class SandboxInstaller():
 
 
     def checkPathCapacity(install_path, image_size):
+        '''
+        Check we have enough storage for several copies of this container
+        '''
 
         partition_data = os.statvfs(install_path)
 
@@ -665,6 +686,9 @@ class SandboxInstaller():
 
 
     def pullImage(install_image, debug):
+        '''
+        Try to pull an image and use the cache when it's already available
+        '''
 
         image_size, total_free_space = SandboxInstaller.checkImgStorage(install_image)
 
@@ -687,6 +711,9 @@ class SandboxInstaller():
 
 
     def buildSandbox(install_path, install_image, image_size, debug):
+        '''
+        This step builds a sandbox from an image
+        '''
 
         SandboxInstaller.checkPathCapacity(install_path, image_size)
 
@@ -706,6 +733,9 @@ class SandboxInstaller():
         del shell
 
     def fixAPTSandbox(install_path):
+        '''
+        Fix issues related to installing packages on Debian in a single-user-sandbox...
+        '''
 
         app_conf_path = os.path.join(install_path, './etc/apt/apt.conf.d/')
 
@@ -720,6 +750,9 @@ class SandboxInstaller():
 
 
     def fixCommands(install_path):
+        '''
+        Fix certain commands to 'work as expected' within a sandbox.
+        '''
 
         def fixDeactivate():
             deac_script = os.path.join(install_path, 'etc/profile.d/deac.sh')
@@ -741,6 +774,9 @@ class SandboxInstaller():
 
 
     def fixPaths(install_path):
+        '''
+        Fix missing paths and files from the container
+        '''
 
         for _folder in SettingsManager.get_settings()['bind_mount_paths']:
 
@@ -762,6 +798,9 @@ class SandboxInstaller():
                 os.makedirs(folder_path)
 
     def fixupSandbox(install_path):
+        '''
+        Apply fixes to the sandboxes to allow non-complex namespaces to work
+        '''
 
         appLogger.info('Fixing Sandbox: "{}"'.format(install_path))
 
@@ -775,8 +814,14 @@ class SandboxInstaller():
 
 
 class appBoxManager():
+    '''
+    Manager for new shell/sandbox environments
+    '''
 
     def create_new_appenv(install_path, install_image, debug):
+        '''
+        Build the environment to be used by a sandbox, containing all of the settings to startup the shell
+        '''
 
         if os.path.exists(install_path):
             appLogger.debug('Found Container at "{}", skipping install.'.format(install_path))
@@ -815,10 +860,15 @@ class appBoxManager():
         appLogger.info('Installed')
 
     def build_env_script():
-
+        '''
+        Build the env script which captures the env in a bash syntax
+        '''
         return SettingsManager.get_app_scriptEnv()
 
     def header():
+        '''
+        # LOGO
+        '''
 
         appLogger.info('                                                            ')
         appLogger.info('░░      ░░░       ░░░       ░░░       ░░░░      ░░░  ░░░░  ░')
@@ -830,6 +880,9 @@ class appBoxManager():
         appLogger.info('')
 
     def start_interactive(custom_cmd=None):
+        '''
+        Wrapper call to launch and track an interactive shell/sandbox
+        '''
 
         m=InteractiveShell()
 
@@ -849,6 +902,9 @@ class appBoxManager():
 
 
     def getArgsParser():
+        '''
+        Parse the Args passed to this instance
+        '''
 
         #class BlankLinesHelpFormatter(argparse.HelpFormatter):
         class BlankLinesHelpFormatter(argparse.RawDescriptionHelpFormatter):
@@ -962,11 +1018,12 @@ RH7>
         return parser
 
 
-if __name__ == '__main__':
-    run_main()
+def run_main():
+    '''
+    This is the main entry into the tool
+    '''
 
-def run_main()
-
+    ### Parse our args and steer
     parser = appBoxManager.getArgsParser()
 
     parsed_args = parser.parse_args(sys.argv[1:])
@@ -980,6 +1037,8 @@ def run_main()
         all_settings = SettingsManager.get_settings() 
         pprint.pprint(all_settings)
         sys.exit(0)
+
+    ### Logging
 
     def setLogLevel(level):
 
@@ -1001,6 +1060,9 @@ def run_main()
     appLogger.debug('Debugging Enabled. Jolan tru.')
     appBoxManager.header()
 
+
+    ### Launch a shell from an existing sandbox
+
     if parsed_args.launch or parsed_args.launch_root:
 
         install_path = parsed_args.launch or parsed_args.launch_root
@@ -1019,11 +1081,19 @@ def run_main()
         appBoxManager.start_interactive(_launch_cmd)
         sys.exit(0)
 
-    this_image = SettingsManager.get_this_image(parsed_args.install_image)
 
-    this_path = os.path.abspath(parsed_args.install_path)
+    ### Download, extract and fix
 
-    appBoxManager.create_new_appenv(this_path, this_image, parsed_args.debug)
+    if parsed_args.install_image or parsed_args.install_path:
+
+        this_image = SettingsManager.get_this_image(parsed_args.install_image)
+
+        this_path = os.path.abspath(parsed_args.install_path)
+
+        appBoxManager.create_new_appenv(this_path, this_image, parsed_args.debug)
+
+
+    ### Activate the sandbox we just found
 
     if parsed_args.run_after or parsed_args.run_command:
         _user_cmd = 'source '+os.path.join(parsed_args.install_path, 'bin/activate')
@@ -1045,4 +1115,8 @@ def run_main()
             appBoxManager.start_interactive(_root_cmd)
 
     sys.exit(0)
+
+
+if __name__ == '__main__':
+    run_main()
 
