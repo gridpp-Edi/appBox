@@ -11,6 +11,7 @@ import pty
 import pwd
 import select
 import signal
+import stat
 import struct
 import subprocess
 import sys
@@ -56,6 +57,12 @@ class SettingsManager():
                 with open(appbox_env_file, 'r') as _settings:
                     return json.load(_settings)
         return {}
+
+    def set_setting(setting, value):
+
+        _ = SettingsManager.get_settings()
+
+        SettingsManager.settings[setting] = value
 
     def get_settings():
 
@@ -442,9 +449,9 @@ class SandboxInstaller():
         activate_script += '}\n\n'
 
         if as_root:
-            apptainer_shell_cmd = SettingsManager.get_settings()['apptainer_cmd'] + ' exec -w -f '+install_path+' /bin/bash'
+            apptainer_shell_cmd = SettingsManager.get_settings()['apptainer_cmd'] + ' exec --no-mount hostfs -w -f '+install_path+' /bin/bash -l'
         else:
-            apptainer_shell_cmd = SettingsManager.get_settings()['apptainer_cmd'] + ' exec -w '+install_path+' /bin/bash'
+            apptainer_shell_cmd = SettingsManager.get_settings()['apptainer_cmd'] + ' exec --no-mount hostfs -w '+install_path+' /bin/bash -l'
 
         #activate_script += apptainer_shell_cmd
 
@@ -603,9 +610,42 @@ class SandboxInstaller():
 
         del shell
 
-    def fixupSandbox(install_path):
+    def fixAPTSandbox(install_path):
 
-        appLogger.info('Fixing Sandbox: "{}"'.format(install_path))
+        app_conf_path = os.path.join(install_path, './etc/apt/apt.conf.d/')
+
+        if os.path.exists(app_conf_path):
+
+            fix_apt  = 'APT::Sandbox::User "root";\nAPT::Sandbox::Verify "0";\n'
+            fix_apt += 'APT::Sandbox::Verify::IDs "0";\nAPT::Sandbox::Verify::Groups "0";\n'
+            fix_apt += 'APT::Sandbox::Verify::Regain "0";'
+
+            with open(os.path.join(app_conf_path, 'sandbox-disable'), 'w+') as _file:
+                _file.write(fix_apt)
+
+
+    def fixCommands(install_path):
+
+        def fixDeactivate():
+            deac_script = os.path.join(install_path, 'etc/profile.d/deac.sh')
+            with open(deac_script, 'w+') as _file:
+                _file.write('alias deactivate=exit')
+
+            st = os.stat(deac_script)
+            os.chmod(deac_script, st.st_mode | stat.S_IEXEC)
+
+        def fixSUDO():
+            sudo_script = os.path.join(install_path, 'etc/profile.d/sudo.sh')
+            with open(sudo_script, 'w+') as _file:
+                _file.write('alias sudo="source '+os.path.join(install_path, 'bin/activate-asroot')+'"')
+            st = os.stat(sudo_script)
+            os.chmod(sudo_script, st.st_mode | stat.S_IEXEC)
+
+        fixDeactivate()
+        fixSUDO()
+
+
+    def fixPaths(install_path):
 
         for _folder in SettingsManager.get_settings()['bind_mount_paths']:
 
@@ -626,18 +666,17 @@ class SandboxInstaller():
             if not os.path.exists(folder_path):
                 os.makedirs(folder_path)
 
-        app_conf_path = os.path.join(install_path, './etc/apt/apt.conf.d/')
+    def fixupSandbox(install_path):
 
-        if os.path.exists(app_conf_path):
+        appLogger.info('Fixing Sandbox: "{}"'.format(install_path))
 
-            fix_apt  = 'APT::Sandbox::User "root";\nAPT::Sandbox::Verify "0";\n'
-            fix_apt += 'APT::Sandbox::Verify::IDs "0";\nAPT::Sandbox::Verify::Groups "0";\n'
-            fix_apt += 'APT::Sandbox::Verify::Regain "0";'
-
-            with open(os.path.join(app_conf_path, 'sandbox-disable'), 'w+') as _file:
-                _file.write(fix_apt)
+        SandboxInstaller.fixPaths(install_path)
 
         SandboxInstaller.build_activate_scripts(install_path)
+
+        SandboxInstaller.fixAPTSandbox(install_path)
+
+        SandboxInstaller.fixCommands(install_path)
 
 
 class appBoxManager():
@@ -659,6 +698,18 @@ class appBoxManager():
 
         # Needed for CACHE/TMP folders
         SandboxInstaller.build_singularity_env(install_path)
+
+        def get_mount_path(path):
+            path = os.path.abspath(path)
+            while not os.path.ismount(path):
+                path = os.path.dirname(path)
+            return path
+
+        install_mount = get_mount_path(install_path)
+
+        if install_mount != '/':
+            bind_paths = SettingsManager.get_settings()['bind_mount_paths']
+            SettingsManager.set_setting('bind_mount_paths', bind_paths + [install_mount, ])
 
         image_size = SandboxInstaller.pullImage(install_image, debug)
 
