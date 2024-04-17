@@ -453,8 +453,6 @@ class SandboxInstaller():
         else:
             apptainer_shell_cmd = SettingsManager.get_settings()['apptainer_cmd'] + ' exec --no-mount hostfs -w '+install_path+' /bin/bash -l'
 
-        #activate_script += apptainer_shell_cmd
-
         which_cmd  = "if [[ $# -eq 0 ]]; then\n"
         which_cmd += apptainer_shell_cmd + '\n'
         which_cmd += "else\n"
