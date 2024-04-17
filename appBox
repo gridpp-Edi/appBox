@@ -20,20 +20,28 @@ import threading
 import time
 import tty
 
+# Global Logger
 appLogger = None
 
+# ENV var for loading settings from JSON file
 APPBOX_ENV = 'APPBOX_SETTINGS'
 
 def getUN():
+    '''
+    Return the username of this account
+    '''
     return pwd.getpwuid(os.getuid())[0]
 
 
 class SettingsManager():
+    ''' This is a class for grouping the tools related to the settings of appBox '''
 
     settings = None
 
     def get_default_bind_mounts():
-
+        '''
+        Return a list of mounts on this system which we can/should bind-mount from host to sandbox
+        '''
         bind_mount_paths = ['/cvmfs','/scratch', '/localdisk', '/Data', '/mnt', '/exports']
 
         found_paths = []
@@ -49,7 +57,9 @@ class SettingsManager():
         return found_paths
 
     def load_env_settings():
-
+        '''
+        This is a method for loading the appBox settings from an (optional) on-disk JSON
+        '''
         appbox_env_file = os.environ.get(APPBOX_ENV, '')
 
         if appbox_env_file:
@@ -59,12 +69,17 @@ class SettingsManager():
         return {}
 
     def set_setting(setting, value):
-
+        '''
+        A short method for allowing externally setting/modifying a setting in code
+        '''
         _ = SettingsManager.get_settings()
 
         SettingsManager.settings[setting] = value
 
     def get_settings():
+        '''
+        Return the settings as a JSON object
+        '''
 
         if SettingsManager.settings:       
             return SettingsManager.settings
@@ -116,6 +131,9 @@ class SettingsManager():
         return SettingsManager.settings
 
     def get_default_scratch():
+        '''
+        Get the default path for some apptainer temp folders
+        '''
         if os.path.exists('/scratch'):
             default_scratch_path = os.path.join('/scratch', 'appBox_'+str(getUN()))
         else:
@@ -123,6 +141,10 @@ class SettingsManager():
         return default_scratch_path
 
     def get_cvmfs_fuse():
+        '''
+        Get the fuse library from cvmfs to resolve fuse symbols
+        (this is to satisfy resolving symbols on systems which don't have all userland fuse installed)
+        '''
 
         if os.path.exists('/usr/lib/libcvmfs_fuse.so'):
             return 'export LD_PRELOAD="/usr/lib/libcvmfs_fuse.so"'
@@ -131,24 +153,44 @@ class SettingsManager():
         else:
             return ''
 
-    def get_singularity_cmd(s_path=None, cmd=None):
+    def get_singularity_cmd(s_path=None, s_cmd=None):
+        '''
+        Return the path for singularity tool
+        '''
 
         if not s_path:
-            path = '/cvmfs/atlas.cern.ch/repo/containers/sw/apptainer/x86_64-el8/current/bin/'
-        if not cmd:
+            cvmfs_path = '/cvmfs/atlas.cern.ch/repo/containers/sw/apptainer/x86_64-el8/current/bin/'
+            if os.path.exists(cvmfs_path):
+                path = cvmfs_path
+            else:
+                path = '/usr/bin'
+        else:
+            path = s_path
+        if not s_cmd:
             cmd = 'apptainer'
+        else:
+            cmd = s_cmd
 
         return os.path.join(path, cmd)
 
     def load_settings(settings_path):
+        '''
+        Need to build some way of loading the settings
+        '''
         pass
 
     def save_settings(settings_path):
+        '''
+        Need to build some way of saving the settings
+        '''
         pass
 
     cmd_env = {}
 
     def get_bind_paths():
+        '''
+        Get paths which are to be bind mounted from host to sandbox
+        '''
 
         path_str = ''
         for subpath in SettingsManager.get_settings()['bind_mount_paths']:
@@ -157,6 +199,9 @@ class SettingsManager():
         return path_str
 
     def get_app_env():
+        '''
+        Get the environment variables which need to be set for the apptainer sandbox
+        '''
 
         CMD_ENV = SettingsManager.cmd_env
 
@@ -180,6 +225,9 @@ class SettingsManager():
         return CMD_ENV
 
     def get_app_scriptEnv():
+        '''
+        Get the env vars for apptainer in a bash-script format
+        '''
 
         script_env = ''
         app_env = SettingsManager.get_app_env()
@@ -190,19 +238,25 @@ class SettingsManager():
         return script_env
 
     def get_app_pythonEnv():
-
+        '''
+        Get the env vars for apptainer in a python dict format
+        '''
         return SettingsManager.get_app_env()
 
     def get_this_image(img_str):
-
+        '''
+        See if the provided image 'name' is a short-hand alias
+        '''
         img_map = SettingsManager.get_settings()['default_mappings']
-
         return img_map.get(img_str, img_str)
 
 
 class NonSubShell():
 
     def run_command(this_cmd):
+        '''
+        Just a small wrapper to execute Popen and to stream the output in real time
+        '''
 
         full_cmd = ['bash', '-c', this_cmd]
 
@@ -214,14 +268,23 @@ class NonSubShell():
 
 
 class NormalSubShell():
-    def __init__(self, quiet, exit_rc=True):
+    '''
+    This class provides some tooling for setting up a pty to execute commands in
+    '''
 
+    def __init__(self, quiet, exit_rc=True):
+        '''
+        This is boiler-plate
+        '''
         self.p = None        
         self.quiet = quiet
         self._should_stop = False
         self.running = False
 
     def _wrangle_tty(self):
+        '''
+        This is some boiler-plate for setting up a pTTY
+        '''
 
         # save original tty setting then set it to raw mode
         old_i_tty = termios.tcgetattr(sys.stdin)
@@ -240,6 +303,9 @@ class NormalSubShell():
         self.stdout_m, self.stdout_s = stdout_m_fd, stdout_s_fd
 
     def _launch_shell(self):
+        '''
+        Launch the shell which we're going to execute some commands in
+        '''
 
         # use os.setsid() make it run in a new process group, or bash job control will not be enabled
         self.p = subprocess.Popen(SettingsManager.get_settings()['interactive_command'],
@@ -253,6 +319,9 @@ class NormalSubShell():
             os.close(s)
 
     def run_queue(self, queued_cmds, ignore_history=True):
+        '''
+        Run a set of commands within a pty
+        '''
 
         self._wrangle_tty()
         self._launch_shell()
@@ -296,8 +365,10 @@ class NormalSubShell():
 
         self._cleanup()
 
-
     def _shell_fwd_bck(self, readable):
+        '''
+        This is the component for handling sending data in/out of the pty
+        '''
 
         if self.p and self.p.poll() is None:
 
@@ -325,6 +396,9 @@ class NormalSubShell():
             return False
             
     def _cleanup(self):
+        '''
+        Some boiler-plate to cleanup after a shell has finished being used
+        '''
 
         self.running = False
 
@@ -339,9 +413,16 @@ class NormalSubShell():
         self.stdout_s = None
         sys.stdout.flush()
 
+
 class InteractiveShell(threading.Thread, NormalSubShell):
+    '''
+    This class can launch a fully interactive shell within our instance
+    '''
 
     def __init__(self):
+        '''
+        Setting up the requirements
+        '''
         threading.Thread.__init__(self)
         NormalSubShell.__init__(self, False)
 
@@ -349,12 +430,21 @@ class InteractiveShell(threading.Thread, NormalSubShell):
         self._launch_shell()
 
     def run(self):
+        '''
+        Start running the shell
+        '''
         self.launch_interactive()
 
     def stop(self):
+        '''
+        Should we try to externally stop this pty
+        '''
         self._should_stop = True
 
     def launch_interactive(self):
+        '''
+        Actual code for launching our interactive shell
+        '''
 
         if not self.p:
             self._wrangle_tty()
@@ -387,8 +477,14 @@ class InteractiveShell(threading.Thread, NormalSubShell):
 
 
 class RunCommand():
+    '''
+
+    '''
 
     def runCommand(thisCmd):
+        '''
+        This is a small wrapper for just running a command
+        '''
 
         if type(thisCmd) is list:
             _cmd = ' '.merge(thisCmd)
