@@ -963,6 +963,9 @@ RH7>
 
 
 if __name__ == '__main__':
+    run_main()
+
+def run_main()
 
     parser = appBoxManager.getArgsParser()
 
