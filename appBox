@@ -16,6 +16,7 @@ import struct
 import subprocess
 import sys
 import termios
+import textwrap
 import threading
 import time
 import tty
@@ -849,13 +850,61 @@ class appBoxManager():
 
     def getArgsParser():
 
-        class BlankLinesHelpFormatter(argparse.HelpFormatter):
+        #class BlankLinesHelpFormatter(argparse.HelpFormatter):
+        class BlankLinesHelpFormatter(argparse.RawDescriptionHelpFormatter):
             def _split_lines(self, text, width):
                 return super()._split_lines(text, width) + ['']
 
+        un = getUN()
+        epilog = """
+------------------------------------------------------------------------------------------
+
+Example Usage for this might be:
+--------------------------------
+
+# Usage 1 (Download, extract, setup then manuall source) #
+##########################################################
+
+RH> ./appBox -ii Ubuntu20 -ip /scratch/appBox_{}/Ubuntu20
+RH> source /scratch/appBox_{}/Ubuntu20/bin/activate
+...
+Ubuntu>
+
+# Usage 2 (Download, extract, setup and drop me into a root shell) #
+####################################################################
+
+RH7> ./appBox -ii docker://almalinux:9 -ip /scratch/appBox_{}/AL9 -rar
+...
+RH9# dnf update -y
+...
+
+# Usage 3 (Download, ..., then run a command and exit) #
+########################################################
+
+RH7> ./appBox -ii Ubuntu22 -ip /scratch/appBox_{}/Ubuntu22 -q -rcr 'echo /etc/os-release'
+PRETTY_NAME="Ubuntu 22.04.4 LTS"
+NAME="Ubuntu"
+VERSION_ID="22.04"
+VERSION="22.04.4 LTS (Jammy Jellyfish)"
+VERSION_CODENAME=jammy
+ID=ubuntu
+ID_LIKE=debian
+HOME_URL="https://www.ubuntu.com/"
+SUPPORT_URL="https://help.ubuntu.com/"
+BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+UBUNTU_CODENAME=jammy
+RH7> 
+
+------------------------------------------------------------------------------------------
+
+""".format(un, un, un, un)
+
+
         parser = argparse.ArgumentParser(
                         prog='appBox', formatter_class=BlankLinesHelpFormatter,
-                        description='This is a short tool to allow you to install a custom image like a "virtualenv".')
+                        description='This is a short tool to allow you to install a custom container image as a sandbox like "virtualenv".',
+                        epilog=epilog)
 
         default_root = SettingsManager.get_settings()['default_sandbox_path']
 
