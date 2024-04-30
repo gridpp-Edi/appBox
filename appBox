@@ -339,10 +339,10 @@ class DockerHub(ImageSource):
 
 class sandboxFixes():
     
-    def __init__(self, sandboxPath):
+    def __init__(self, sandboxPath, addNV):
         
         self.sandboxPath = sandboxPath
-        self.addNvidia = False
+        self.addNvidia = addNV
     
     def applyAllFixes(self):
         
@@ -353,6 +353,7 @@ class sandboxFixes():
         self.fixUserAccounts()
         self.fixAliases()
         self.fixEnvironment()
+        self.installAppBox()
         
     def fixFilePermissions(self):
         '''
@@ -400,6 +401,7 @@ class sandboxFixes():
         
         if self.addNvidia:
             base_stubs.append('/usr/bin/nvidia-smi')
+            base_stubs.append('/usr/bin/nvidia-modprobe')
 
         return base_stubs
 
@@ -492,7 +494,9 @@ class sandboxFixes():
     
     def fixEnvironment(self):
         
-        pass
+        if self.addNvidia:
+            with open(os.path.join(self.sandboxPath, './etc/ld.so.conf.d/ld.wsl.conf')) as _file:
+                _file.write('/usr/lib/wsl/lib')
 
     def fixAptSandboxing(self):
         '''
@@ -510,9 +514,34 @@ class sandboxFixes():
             with open(os.path.join(app_conf_path, 'sandbox-disable'), 'w+') as _file:
                 _file.write(fix_apt)
 
+    def installAppBox(self):
+        '''
+        Install the appBox tool into the sandbox
+        '''
+        currentInstance = os.path.abspath(__file__)
+        with open(currentInstance, 'r') as _file:
+            _content = _file.read()
+        installInstance = os.path.join(self.sandboxPath, './bin/appBox')
+        with open(installInstance, 'w+') as _file:
+            _file.write(_content)
+            
+        activate_script = """#!/bin/bash
+
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
+/bin/env python3 ./appBox -l ${SCRIPT_DIR}/../ -ra"""
+        activatePath = os.path.join(self.sandboxPath, './bin/activate')
+        with open(activatePath, 'w+') as _file:
+            _file.write(activate_script)
+
+        for _file in [installInstance, activatePath, ]:
+            st = os.stat(_file)
+            os.chmod(_file, st.st_mode | stat.S_IEXEC)
+
+
 class sessionManager():
 
-    def __init__(self, sandboxPath, compatV1=False):
+    def __init__(self, sandboxPath, compatV1=False, addNV=False):
         '''
         Standard __init__ :)
         '''
@@ -522,6 +551,7 @@ class sessionManager():
         self.old_i_tty = None
         self.sandboxPath = sandboxPath
         self.compatV1 = compatV1
+        self.addNvidia = addNV
 
     def _wrangle_tty(self):
         '''
@@ -595,9 +625,10 @@ class sessionManager():
         '''
         This is a list of directories to be mounted into the sandbox from the host
         '''
-        return ['/home', '/tmp', '/dev', '/etc/resolv.conf', '/cvmfs', '/scratch', '/Data', '/localdisk', '/sys', '/etc/localtime',
-                '/usr/bin/nvidia-smi', #'/usr/lib64/libnvidia-ml.so', '/usr/lib64/libnvidia-ml.so.1', '/usr/lib64/libnvidia-ml.so.545.23.08',
-                '/etc/ld.so.conf.d/ld.wsl.conf', '/usr/lib/wsl', '/usr/bin/nvidia-modprobe']
+        mounts = ['/home', '/tmp', '/dev', '/etc/resolv.conf', '/cvmfs', '/scratch', '/Data', '/localdisk', '/sys', '/etc/localtime',]
+        if self.addNvidia:
+            mounts += ['/usr/lib/wsl', '/usr/bin/nvidia-smi', '/usr/bin/nvidia-modprobe']
+        return mounts
 
     def mountHost(self):
         '''
@@ -670,7 +701,7 @@ class sessionManager():
     def _getSandboxCmd(self, command=None, asRoot=False):
 
         if command is None:
-            command = '/bin/bash -l'
+            command = '"/bin/bash -l"'
     
         if not self.compatV1:
             # Continue as Normal and use good hosts unshare
@@ -960,6 +991,9 @@ RH7>
         parser.add_argument('-compat', '--compat-v1', action='store_true',
                             help='Use the older compatibility mode for the sandbox. This allows use of a CO8 host, but has issues with mounts.')
 
+        parser.add_argument('-addNV', '--add-nvidia', action='store_true',
+                            help='Add the nvidia-smi binary to the sandbox.')
+
         return parser
 
 
@@ -984,13 +1018,13 @@ def run_sandbox(sandboxPath, asRoot, compatV1=False):
         thisSandbox.cleanupSpaces()
 
 
-def run_command(sandboxPath, command, asRoot, compatV1=False):
+def run_command(sandboxPath, command, asRoot, compatV1=False, addNV=False):
     '''
     Run a command within a sandbox
     '''
 
     try:
-        thisSandbox = sessionManager(sandboxPath, compatV1)
+        thisSandbox = sessionManager(sandboxPath, compatV1, addNV)
         thisSandbox.setupHostSpace()
 
         thisSandbox.mountHost()
@@ -1032,6 +1066,7 @@ def main():
     wanted_dest = None
     should_run = False
     needToInstall = False
+    addNV = parsed_args.add_nvidia
 
     if parsed_args.compat_v1:
         compatV1 = True
@@ -1070,12 +1105,16 @@ def main():
     #    wanted_dest = parsed_args.run_interactive_root
     #    asRoot = True
     #    should_run = True
+    
+    wanted_dest = os.path.abspath(wanted_dest)
+    
+    appLogger.debug('Looking in path: "{}"'.format(wanted_dest))
         
     if parsed_args.run_path:
         wanted_dest = parsed_args.run_path
         should_run = True
 
-    if not os.path.exists(wanted_dest):        
+    if not os.path.exists(wanted_dest):
         appLogger.info('Sandbox: "{}" does not exist.'.format(wanted_dest))
         appLogger.info('Installing: "{}" at "{}"'.format(wanted_image, wanted_dest))
         needToInstall = True
@@ -1102,7 +1141,7 @@ def main():
         # Extract the image to the destination path
         image_manager.buildSandbox(image_name, image_tag, wanted_dest)
         
-        thisSandbox = sandboxFixes(wanted_dest)
+        thisSandbox = sandboxFixes(wanted_dest, addNV)
         thisSandbox.applyAllFixes()
 
     if should_run:
@@ -1111,7 +1150,7 @@ def main():
             command_to_run = '" ' + command_to_run + ' "'
     
         # We now plan to run a command or launch a shell
-        rc = run_command(wanted_dest, command_to_run, asRoot, compatV1)
+        rc = run_command(wanted_dest, command_to_run, asRoot, compatV1, addNV)
         sys.exit(rc)
         
     sys.exit(0)

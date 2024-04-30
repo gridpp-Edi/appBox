@@ -64,7 +64,7 @@ class SettingsManager():
         appbox_env_file = os.environ.get(APPBOX_ENV, '')
 
         if appbox_env_file:
-            if os.path.exits(appbox_env_file):
+            if os.path.exists(appbox_env_file):
                 with open(appbox_env_file, 'r') as _settings:
                     return json.load(_settings)
         return {}
@@ -1034,8 +1034,10 @@ def run_main():
 
     if parsed_args.dump_settings:
 
-        all_settings = SettingsManager.get_settings() 
-        pprint.pprint(all_settings)
+        all_settings = SettingsManager.get_settings()
+        #json_settings = json.load(all_settings)
+        print(json.dumps(all_settings, sort_keys=True, indent=2))
+        #logging.info(json.dumps(all_settings, indent=2))
         sys.exit(0)
 
     ### Logging
