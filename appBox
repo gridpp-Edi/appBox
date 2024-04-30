@@ -1,31 +1,30 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+#!/bin/env python3
 
 import argparse
 import fcntl
 import json
 import logging
 import os
-import pprint
 import pty
 import pwd
 import select
-import signal
+import shutil
 import stat
 import struct
 import subprocess
 import sys
+import tarfile
 import termios
-import textwrap
-import threading
 import time
 import tty
+import urllib.request
+import uuid
 
 # Global Logger
 appLogger = None
 
-# ENV var for loading settings from JSON file
-APPBOX_ENV = 'APPBOX_SETTINGS'
+appBoxVersion = '2.0.0'
+
 
 def getUN():
     '''
@@ -34,253 +33,495 @@ def getUN():
     return pwd.getpwuid(os.getuid())[0]
 
 
-class SettingsManager():
-    ''' This is a class for grouping the tools related to the settings of appBox '''
+def getHome():
+    '''
+    Return the home directory of this account
+    '''
+    return pwd.getpwuid(os.getuid())[5]
 
-    settings = None
 
-    def get_default_bind_mounts():
-        '''
-        Return a list of mounts on this system which we can/should bind-mount from host to sandbox
-        '''
-        bind_mount_paths = ['/cvmfs','/scratch', '/localdisk', '/Data', '/mnt', '/exports']
+class ImageSource():
 
-        found_paths = []
-
-        for subpath in bind_mount_paths:
-            if not os.path.exists(subpath):
-                if appLogger:
-                    appLogger.debug('PATH: {} not found so won\'t attempt to mount into contaier.'.format(subpath))
-                continue
-
-            found_paths.append(subpath)
-
-        return found_paths
-
-    def load_env_settings():
-        '''
-        This is a method for loading the appBox settings from an (optional) on-disk JSON
-        '''
-        appbox_env_file = os.environ.get(APPBOX_ENV, '')
-
-        if appbox_env_file:
-            if os.path.exits(appbox_env_file):
-                with open(appbox_env_file, 'r') as _settings:
-                    return json.load(_settings)
-        return {}
-
-    def set_setting(setting, value):
-        '''
-        A short method for allowing externally setting/modifying a setting in code
-        '''
-        _ = SettingsManager.get_settings()
-
-        SettingsManager.settings[setting] = value
-
-    def get_settings():
-        '''
-        Return the settings as a JSON object
-        '''
-
-        if SettingsManager.settings:       
-            return SettingsManager.settings
-
-        _settings = {
-             'apptainer_cmd': SettingsManager.get_singularity_cmd(),
-             'bind_mount_paths': SettingsManager.get_default_bind_mounts(),
-             'copy_from_host': ['LC_ALL', 'LANG', 'LANGUAGE', 'PS1'],
-             'default_fuse_lib_preload': SettingsManager.get_cvmfs_fuse(),
-             'default_image_wrk_path': SettingsManager.get_default_scratch(),
-             'default_img': 'docker://centos:centos7',
-             'default_mappings': {
-                                   'CO6':      'docker://centos:centos6',
-                                   'CO7':      'docker://centos:centos7',
-                                   'SL7':      'docker://centos:centos7',
-                                   'EL7':      'docker://centos:centos7',
-                                   'CO8':      'docker://almalinux:8',
-                                   'EL8':      'docker://almalinux:8',
-                                   'Alma8':    'docker://almalinux:8',
-                                   'EL9':      'docker://almalinux:9',
-                                   'Alma9':    'docker://almalinux:9',
-                                   'Rocky8':   'docker://rockylinux:8',
-                                   'Rocky9':   'docker://rockylinux:9',
-                                   'Ubuntu':   'docker://ubuntu:22.04',
-                                   'Ubuntu22': 'docker://ubuntu:22.04',
-                                   'Ubuntu20': 'docker://ubuntu:20.04',
-                                   'TF216':    'docker://tensorflow/tensorflow:2.16.1-gpu-jupyter',
-                                   'TF215':    'docker://tensorflow/tensorflow:2.15.0-gpu-jupyter',
-                                   'TF214':    'docker://tensorflow/tensorflow:2.14.0-gpu-jupyter',
-                                   'PyTorch22CUDA12': 'docker://pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime',
-                                   'PyTorch22CUDA11': 'docker://pytorch/pytorch:2.2.2-cuda11.8-cudnn8-runtime',
-                                   'PyTorch21CUDA12': 'docker://pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime',
-                                   'PyTorch21CUDA11': 'docker://pytorch/pytorch:2.2.2-cuda11.8-cudnn8-runtime',
-                                 },
-             'default_sandbox_path': os.path.join(SettingsManager.get_default_scratch(), 'appBox'),
-             'exec_as_root_by_default': False,
-             'interactive_command': ['/bin/bash', '-i'],
-             'timeout': 0.05,
-            }
-
-        json_settings = SettingsManager.load_env_settings()
-
-        for k, v in _settings.items():
-            if k in json_settings.keys():
-                _settings[k] = json_settings[k]
-
-        SettingsManager.settings = _settings
-
-        return SettingsManager.settings
-
-    def get_default_scratch():
-        '''
-        Get the default path for some apptainer temp folders
-        '''
-        if os.path.exists('/scratch'):
-            default_scratch_path = os.path.join('/scratch', 'appBox_'+str(getUN()))
+    def __init__(self, defaultCacheDir=None):
+        if defaultCacheDir:
+            self.imageCacheDir = defaultCacheDir
         else:
-            default_scratch_path = os.path.join('/tmp', 'appBox_'+str(getUN()))
-        return default_scratch_path
+            self.imageCacheDir = '/tmp/appBox_{}'.format(getUN())
 
-    def get_cvmfs_fuse():
-        '''
-        Get the fuse library from cvmfs to resolve fuse symbols
-        (this is to satisfy resolving symbols on systems which don't have all userland fuse installed)
-        '''
+    def writeContainerInfo(self, _file, image, tag):
 
-        if os.path.exists('/usr/lib/libcvmfs_fuse.so'):
-            return 'export LD_PRELOAD="/usr/lib/libcvmfs_fuse.so"'
-        elif os.path.exists('/usr/lib64/libcvmfs_fuse.so'):
-            return 'export LD_PRELOAD="/usr/lib64/libcvmfs_fuse.so"'
+        appBox_metaData = { '__version__': appBoxVersion,
+                            'containerName': '{}://{}:{}'.format(self.proto, image, tag),
+                            'installedTime': '{}'.format(str(time.time())),
+                          }
+        json.dump(appBox_metaData, _file, ensure_ascii=True, indent=2)
+
+    def dumpContainerInfo(self, metaData):
+
+        with open(metaData, 'r') as _file:
+            appBoxData = json.loads(_file.read())
+
+        appLogger.info(appBoxData)
+
+    def getArch(self):
+
+        ## TODO add logic to determine correct string for each arch based on running system
+        return 'amd64'
+
+
+class DockerHub(ImageSource):
+
+    def __init__(self, defaultCacheDir=None, should_cleanup=False):
+
+        ImageSource.__init__(self, defaultCacheDir)
+
+        # Cached tokens during this instance
+        self.token = {}
+
+        self.docker_auth = "auth.docker.io"
+        self.docker_auth_service = "registry.docker.io"
+        self.docker_reg = "registry-1.docker.io"
+        self.image_pre = "library"
+
+        self._should_cleanup = bool(should_cleanup)
+
+        self.proto = 'docker'
+
+    def _getImageStr(self, image):
+
+        image_pre = self.image_pre
+        image_split = image.split('/')
+        if len(image_split) > 1:
+            image_pre = image_split[0]
+            image = image_split[1]
+        return image_pre, image
+
+    def checkToken(self, token, image):
+        '''
+        Just try to list the manifest and return based on the authenticated or not
+        '''
+        try:
+            image_pre, image = self._getImageStr(image)
+            _ = urllib.request.urlopen(urllib.request.Request(
+                    "https://{}/v2/{}/{}/manifests/{}".format(self.docker_reg, image_pre, image, "latest")
+                )).read()
+            return True
+        except:
+            return False
+
+    def getToken(self, image):
+
+        if image in self.token:
+            this_token = self.token[image]
+            if self.checkToken(this_token, image):
+                return this_token
+
+        image_pre, image = self._getImageStr(image)
+
+        appLogger.debug("Querying: https://{}/token?service={}&scope=repository:{}/{}:pull".format(self.docker_auth, self.docker_auth_service,
+                                                                               image_pre, image))
+        token_response = urllib.request.urlopen(urllib.request.Request(
+            "https://{}/token?service={}&scope=repository:{}/{}:pull".format(self.docker_auth, self.docker_auth_service,
+                                                                             image_pre, image),
+            #    headers={"Accept" : ''}
+        )).read()
+        #appLogger.debug('Requested token for "{}", received: "{}"'.format(image, token_response))
+
+        token = json.loads(token_response.decode())['token']
+
+        self.token[image] = token
+
+        return self.token[image]
+
+    def getDigest(self, manifest, image):
+
+        appLogger.debug('Manifest: {}'.format(manifest))
+
+        digest_list = []
+
+        ## '.fsLayers[]' | jq -r '.blobSum'
+        ## Read the blobSum and return
+
+        ## '.layers[0]' | jq -r '.digest'
+        ## Read the digest from the layers and return
+        if 'layers' in manifest:
+            for this_layer in manifest['layers']:
+                digest_list.append({'mediaType': this_layer['mediaType'],
+                                    'digest': this_layer['digest']})
+
+        ## '.manifest[0]' | jq -r '.digest'
+        ## Read the manifest, get the correct digests and return
+        elif 'manifests' in manifest:
+            this_arch = self.getArch()
+            for _manifest in manifest['manifests']:
+                if _manifest['platform']['architecture'] == this_arch:
+                    this_csum = _manifest['digest']
+
+                    token = self.getToken(image)
+                    _headers = self.getHeaders(token, "application/vnd.oci.image.manifest.v1+json")
+
+                    manifest_response = self.getManifests(image, this_csum, _headers)
+
+                    manifest_json = json.loads(manifest_response)
+
+                    digest_list = self.getDigest(manifest_json, image)
+
+                    break
+
+        #raise Exception('here')
+        return digest_list
+
+    def _assembleImage(self, image_layers, output_image):
+
+        ## Perform logic to assemble layers into single compressed image
+
+        appLogger.debug('Image Layers: {}'.format(image_layers))
+
+        tmpFolder = os.path.join(self.imageCacheDir, 'appBox_tmpFolder_{}'.format(str(uuid.uuid4())[:8]))
+        os.makedirs(tmpFolder)
+
+        for layer in image_layers:
+            if layer['mediaType'] in ['application/vnd.docker.image.rootfs.diff.tar.gzip',
+                                      'application/vnd.oci.image.layer.v1.tar+gzip']:
+                ## TODO add a tarfile filter to catch (bad image) failing mknod errors
+                ## This should probably be done by a filter as we 'care' about some errors we're silencing here
+                ## See Ubuntu:16.04 if you can still find it...
+                with tarfile.open(layer['cacheFile'], errorlevel=0) as _tfile:
+                    _tfile.extractall(tmpFolder)
+
+        for (root, dirs, files) in os.walk(tmpFolder, topdown=True):
+            for _dir in dirs:
+                this_path = os.path.join(root,_dir)
+                if not os.path.islink(this_path):
+                    current = stat.S_IMODE(os.lstat(this_path).st_mode)
+                    os.chmod(this_path, current | stat.S_IWUSR | stat.S_IRUSR | stat.S_ISGID)
+            for _file in files:
+                this_path = os.path.join(root,_file)
+                if not os.path.islink(this_path):
+                    current = stat.S_IMODE(os.lstat(this_path).st_mode)
+                    os.chmod(os.path.join(root,_file), current | stat.S_IWUSR | stat.S_IRUSR)
+
+        with tarfile.open(output_image, "w|gz") as tar:
+            contents = os.listdir(tmpFolder)
+            for _obj in contents:
+                tar.add(os.path.join(tmpFolder,_obj), arcname=_obj)
+
+        shutil.rmtree(tmpFolder)
+
+        return output_image
+
+    def cacheImage(self, image, tag):
+
+        return os.path.join(self.imageCacheDir, 'appBox_{}_{}.compressed'.format(image, tag))
+
+    def getHeaders(self, token, accept="application/vnd.docker.distribution.manifest.v2+json"):
+
+        return {"Accept": accept,
+                 "Authorization": "Bearer {}".format(token),
+                 "Content-Type": "application/json",
+                 "User-Agent": "curl/8.0.1"}
+
+    def getManifests(self, image, tag, _headers):
+        appLogger.debug('Request Headers: {}'.format(_headers))
+
+        image_pre, image = self._getImageStr(image)
+
+        appLogger.debug("Querying: https://{}/v2/{}/{}/manifests/{}".format(self.docker_reg, image_pre, image, tag))
+
+        return urllib.request.urlopen(urllib.request.Request(
+            "https://{}/v2/{}/{}/manifests/{}".format(self.docker_reg, image_pre, image, tag),
+            headers = _headers,
+        )).read()
+
+    def pullContainer(self, image, tag):
+
+        image_pre, image_sub = self._getImageStr(image)
+        output_image = self.cacheImage(image_sub, tag)
+
+        if os.path.isfile(output_image):
+            appLogger.info('Output Image: "{}" found for image: "{}", tag: "{}"'.format(output_image, image, tag))
+            return
         else:
-            return ''
+            appLogger.info('Pulling Image for: {}:{}'.format(image, tag))
 
-    def get_singularity_cmd(s_path=None, s_cmd=None):
-        '''
-        Return the path for singularity tool
-        '''
+        token = self.getToken(image)
 
-        if not s_path:
-            cvmfs_path = '/cvmfs/atlas.cern.ch/repo/containers/sw/apptainer/x86_64-el8/current/bin/'
-            if os.path.exists(cvmfs_path):
-                path = cvmfs_path
-            else:
-                path = '/usr/bin'
+        _headers = self.getHeaders(token)
+
+        appLogger.debug('Request Headers: {}'.format(_headers))
+        appLogger.debug("Querying: https://{}/v2/{}/{}/manifests/{}".format(self.docker_reg, self.image_pre, image, tag))
+
+        try:
+            manifest_response = self.getManifests(image, tag, _headers)
+        except Exception as err:
+            appLogger.error('Failed to get manifest for image: "{}", tag: "{}"'.format(image, tag))
+            appLogger.error('Error: {}'.format(err))
+            sys.exit(201)
+
+        manifest_json = json.loads(manifest_response)
+
+        this_digest_list = self.getDigest(manifest_json, image)
+
+        def checkOutputLocation(outputDir):
+            if not os.path.exists(outputDir):
+                appLogger.debug('Creating output directory: {}'.format(outputDir))
+                os.makedirs(outputDir)
+
+        checkOutputLocation(self.imageCacheDir)
+
+        image_layers = []
+
+        image_pre, image = self._getImageStr(image)
+
+        for this_digest in this_digest_list:
+
+            output_cache = '{}_{}_{}.digest'.format(this_digest['digest'], image, tag)
+            output_cache = os.path.join(self.imageCacheDir, output_cache)
+            image_layers.append({'mediaType': this_digest['mediaType'],
+                                 'cacheFile': output_cache,
+                                 'digest': this_digest['digest']})
+
+            appLogger.debug('Downloading Layer: {}'.format(this_digest['digest']))
+            with urllib.request.urlopen(urllib.request.Request(
+                "https://{}/v2/{}/{}/blobs/{}".format(self.docker_reg, image_pre,
+                                                      image, this_digest['digest']),
+                headers = _headers)) as request_data:
+
+                with open(output_cache, 'wb+') as _file:
+                    while True:
+                        chunk = request_data.read(32 * 1024)
+                        if not chunk:
+                            break
+                        _file.write(chunk)
+
+        assembled_image = self._assembleImage(image_layers, output_image)
+        
+        appLogger.info('Image assembled at: {}'.format(assembled_image))
+
+        #def cleanUp(to_be_removed):
+        #    ## Loop through and unlink un-needed layer and compressed layer versions
+        #    while _file in to_be_removed:
+        #        os.unlink(_file)
+
+        if self._should_cleanup:
+            for _layer in image_layers:
+                os.unlink(_layer['cacheFile'])
+
+    def buildSandbox(self, image, tag, dest):
+
+        appBox_file = os.path.join(dest, '._appBoxContainer')
+
+        _, img = self._getImageStr(image)
+
+        this_image = self.cacheImage(img, tag)
+
+        if not os.path.exists(this_image):
+            appLogger.error('Expected to find (cached) image at: "{}", for image: "{}", tag: "{}".'.format(this_image, image, tag))
+            appLogger.error('Did you forget to pull first?')
+            return
+
+        if not os.path.exists(dest):
+            os.makedirs(dest)
         else:
-            path = s_path
-        if not s_cmd:
-            cmd = 'apptainer'
-        else:
-            cmd = s_cmd
+            if os.path.exists(appBox_file):
+                appLogger.info('Found appBox sandbox at: {}'.format(dest))
+                self.dumpContainerInfo(appBox_file)
+                return
 
-        return os.path.join(path, cmd)
+        appLogger.info('Extracting Compressed Image.')
+        with tarfile.open(this_image) as _tfile:
+            _tfile.extractall(dest)
 
-    def load_settings(settings_path):
+        appLogger.info('Writing metaData.')
+        with open(appBox_file, 'w+') as _file:
+            self.writeContainerInfo(_file, image, tag)
+
+
+class sandboxFixes():
+    
+    def __init__(self, sandboxPath):
+        
+        self.sandboxPath = sandboxPath
+        self.addNvidia = False
+    
+    def applyAllFixes(self):
+        
+        self.fixFilePermissions()
+        self.fixAptSandboxing()
+        self.fixMissingPaths()
+        self.fixMissingStubs()
+        self.fixUserAccounts()
+        self.fixAliases()
+        self.fixEnvironment()
+        
+    def fixFilePermissions(self):
         '''
-        Need to build some way of loading the settings
+        Fix the permissions of a given path
         '''
+        for root, dirs, files in os.walk(self.sandboxPath, topdown=True):
+            for _dir in dirs:
+                this_path = os.path.join(root,_dir)
+                if not os.path.islink(this_path):
+                    current = stat.S_IMODE(os.lstat(this_path).st_mode)
+                    os.chmod(this_path, current | stat.S_IWUSR | stat.S_IRUSR | stat.S_ISGID)
+            for _file in files:
+                this_path = os.path.join(root,_file)
+                if not os.path.islink(this_path):
+                    current = stat.S_IMODE(os.lstat(this_path).st_mode)
+                    os.chmod(os.path.join(root,_file), current | stat.S_IWUSR | stat.S_IRUSR)
+
+    def _getPathList(self):
+        '''
+        '''
+        base_path_list = ['/dev', '/etc', '/cvmfs', '/scratch', '/Data', '/localdisk', '/sys', '/tmp', '/home']
+        
+        if self.addNvidia:
+            base_path_list.append('/usr/lib/wsl')
+            
+        return base_path_list        
+
+    def fixMissingPaths(self):
+        '''
+        '''
+        needed_sandbox_paths = self._getPathList()
+        
+        abs_paths = []
+        for _path in needed_sandbox_paths:
+            abs_paths.append(os.path.abspath(os.path.join(self.sandboxPath, '.'+_path)))
+
+        for _path in abs_paths:
+            if not os.path.exists(_path):
+                os.makedirs(_path)
+
+    def _getStubList(self):
+        '''
+        '''
+        base_stubs = ['/etc/resolv.conf', '/etc/localtime', '/etc/hostname']
+        
+        if self.addNvidia:
+            base_stubs.append('/usr/bin/nvidia-smi')
+
+        return base_stubs
+
+    def fixMissingStubs(self):
+        '''
+        Create the stubs needed for the sandbox
+        '''
+        needed_stubs = self._getStubList()
+        
+        abs_paths = []
+        for _path in needed_stubs:
+            abs_paths.append(os.path.abspath(os.path.join(self.sandboxPath, '.'+_path)))
+            
+        for _path in abs_paths:
+            if not os.path.exists(_path):
+                with open(_path, 'a'):
+                    os.utime(_path, None)
+
+    def getAnonUIDGID(self):
+        # TODO work out if we need to detect/change this
+        return (65534, 65534)
+
+    def fixUserAccounts(self):
+        '''
+        Fix the user accounts within the sandbox
+        '''
+        self._fixPasswd()
+        self._fixGroup()
+
+    def _fixPasswd(self):
+        '''
+        '''
+        with open(os.path.join(self.sandboxPath, './etc/passwd'), 'r') as _file:
+            _content = _file.read()
+            appLogger.debug('Content: "{}"'.format(_content))
+        
+        new_content = 'root:x:0:0:root:/root:/bin/bash\n'
+        new_content += '{}:x:65534:65534:{}:{}:/bin/bash\n'.format(getUN(),getUN(),getHome())
+
+        a_uid, a_gid = self.getAnonUIDGID()
+
+        for _line in _content.split('\n'):
+            if _line:
+                _user, _, _uid, _gid, _name, _home, _shell = _line.split(':')
+                if _user in ['root', getUN()]:
+                    continue
+                appLogger.debug('User: "{}", UID: "{}", GID: "{}", Name: "{}", Home: "{}", Shell: "{}"'.format(
+                                    _user, _uid, _gid, _name, _home, _shell))
+                
+                new_content += '{}:x:{}:{}:{}:{}:{}\n'.format(_user, a_uid, a_gid, _name, _home, _shell)
+
+        with open(os.path.join(self.sandboxPath, './etc/passwd'), 'w+') as _file:
+            _file.write(new_content)
+    
+    def _fixGroup(self):
+        '''
+        '''
+        with open(os.path.join(self.sandboxPath, './etc/group'), 'r') as _file:
+            _content = _file.read()
+            appLogger.debug('Content: "{}"'.format(_content))
+
+        _, a_gid = self.getAnonUIDGID()
+
+        new_content = 'root:x:0:\n'
+        new_content += '{}:x:{}:\n'.format(getUN(), a_gid)
+        
+        for _line in _content.split('\n'):
+            if _line:
+                _group, _, _gid, _users = _line.split(':')
+                if _group in ['root', getUN()]:
+                    continue
+                appLogger.debug('Group: "{}", GID: "{}", Users: "{}"'.format(_group, _gid, _users))
+
+                new_content += '{}:x:{}:{}\n'.format(_group, a_gid, _users)
+                
+        with open(os.path.join(self.sandboxPath, './etc/group'), 'w+') as _file:
+            _file.write(new_content)
+    
+    def fixAliases(self):
+        
+        def fixDeactivate():
+            deac_script = os.path.join(self.sandboxPath, 'etc/profile.d/deac.sh')
+            with open(deac_script, 'w+') as _file:
+                _file.write('alias deactivate=exit')
+
+            st = os.stat(deac_script)
+            os.chmod(deac_script, st.st_mode | stat.S_IEXEC)
+
+        fixDeactivate()
+    
+    def fixEnvironment(self):
+        
         pass
 
-    def save_settings(settings_path):
+    def fixAptSandboxing(self):
         '''
-        Need to build some way of saving the settings
+        Fix issues related to installing packages on Debian in a single-user-sandbox...
         '''
-        pass
+        app_conf_path = os.path.join(self.sandboxPath, './etc/apt/apt.conf.d/')
 
-    cmd_env = {}
+        if os.path.exists(app_conf_path):
+            # Only want to apply this 'fix' in sandboxes where apt is installed
 
-    def get_bind_paths():
+            fix_apt  = 'APT::Sandbox::User "root";\nAPT::Sandbox::Verify "0";\n'
+            fix_apt += 'APT::Sandbox::Verify::IDs "0";\nAPT::Sandbox::Verify::Groups "0";\n'
+            fix_apt += 'APT::Sandbox::Verify::Regain "0";'
+
+            with open(os.path.join(app_conf_path, 'sandbox-disable'), 'w+') as _file:
+                _file.write(fix_apt)
+
+class sessionManager():
+
+    def __init__(self, sandboxPath, compatV1=False):
         '''
-        Get paths which are to be bind mounted from host to sandbox
+        Standard __init__ :)
         '''
-
-        path_str = ''
-        for subpath in SettingsManager.get_settings()['bind_mount_paths']:
-            path_str+=subpath+':'+subpath+','
-
-        return path_str
-
-    def get_app_env():
-        '''
-        Get the environment variables which need to be set for the apptainer sandbox
-        '''
-
-        CMD_ENV = SettingsManager.cmd_env
-
-        if len(CMD_ENV.keys())==0:
-
-            CMD_ENV['SCRATCH_ROOT']=SettingsManager.get_settings()['default_image_wrk_path']
-            CMD_ENV['APPTAINER_BIND']=SettingsManager.get_bind_paths()
-            for app_env in ['', 'APPTAINERENV_', 'APPTAINERENV_APPTAINERENV_']:
-                for wrk_folder in [('TMPDIR', 'TMP'), ('CACHEDIR', 'CACHE'), ('PULLFOLDER', 'PULL')]:
-                    CMD_ENV[app_env + 'APPTAINER_' + wrk_folder[0]]=os.path.join(CMD_ENV['SCRATCH_ROOT'],wrk_folder[1])
-                CMD_ENV[app_env + 'BIND']=SettingsManager.get_bind_paths()
-
-            for host_env_var in SettingsManager.get_settings()['copy_from_host']:
-                host_env = os.environ
-                if host_env_var in host_env:
-                    for app_env in ['', 'APPTAINERENV_', 'APPTAINERENV_APPTAINERENV_']:
-                        CMD_ENV[app_env + host_env_var] = host_env[host_env_var]
-                else:
-                    appLogger.debug('Ignoring env var "{}" as not found on "host"'.format(host_env_var))
-
-        return CMD_ENV
-
-    def get_app_scriptEnv():
-        '''
-        Get the env vars for apptainer in a bash-script format
-        '''
-
-        script_env = ''
-        app_env = SettingsManager.get_app_env()
-
-        for k,v in app_env.items():
-            script_env+='export {}="{}"\n'.format(k,v)
-
-        return script_env
-
-    def get_app_pythonEnv():
-        '''
-        Get the env vars for apptainer in a python dict format
-        '''
-        return SettingsManager.get_app_env()
-
-    def get_this_image(img_str):
-        '''
-        See if the provided image 'name' is a short-hand alias
-        '''
-        img_map = SettingsManager.get_settings()['default_mappings']
-        return img_map.get(img_str, img_str)
-
-
-class NonSubShell():
-
-    def run_command(this_cmd):
-        '''
-        Just a small wrapper to execute Popen and to stream the output in real time
-        '''
-
-        full_cmd = ['bash', '-c', this_cmd]
-
-        with subprocess.Popen(full_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as process:
-            for line in process.stdout:
-                appLogger.error(line.decode('utf8').rstrip())
-
-        return process.returncode
-
-
-class NormalSubShell():
-    '''
-    This class provides some tooling for setting up a pty to execute commands in
-    '''
-
-    def __init__(self, quiet, exit_rc=True):
-        '''
-        This is boiler-plate
-        '''
-        self.p = None        
-        self.quiet = quiet
-        self._should_stop = False
-        self.running = False
+        self.proc = None
+        self.pid_parent = None
+        self.pid_child = None
+        self.old_i_tty = None
+        self.sandboxPath = sandboxPath
+        self.compatV1 = compatV1
 
     def _wrangle_tty(self):
         '''
@@ -298,609 +539,310 @@ class NormalSubShell():
         winsize = struct.pack("HHHH", size[1], size[0], 0, 0)
         fcntl.ioctl(stdout_m_fd, termios.TIOCSWINSZ, winsize)
 
-        #print('Opening PTY')
+        appLogger.debug('Opening PTY')
 
         self.old_i_tty = old_i_tty
         self.stdout_m, self.stdout_s = stdout_m_fd, stdout_s_fd
 
-    def _launch_shell(self):
+    def setupHostSpace(self):
         '''
-        Launch the shell which we're going to execute some commands in
+        This sets up a 'root' namespace.
+        This persists for the lifetime of this shell.
         '''
 
-        # use os.setsid() make it run in a new process group, or bash job control will not be enabled
-        self.p = subprocess.Popen(SettingsManager.get_settings()['interactive_command'],
-                      preexec_fn=os.setsid,
-                      stdin=self.stdout_s,
-                      stdout=self.stdout_s,
-                      stderr=self.stdout_s,
-                      universal_newlines=True)
+        background_task='/bin/bash'
+        self.proc = subprocess.Popen("unshare -primf --propagation unchanged {}".format(background_task),
+                                     shell=True, preexec_fn=os.setsid,
+                                     stdin = subprocess.PIPE,
+                                     stdout = subprocess.PIPE,
+                                     stderr = subprocess.PIPE,
+                                     universal_newlines = True)
 
-        for s in [self.stdout_s,]:
-            os.close(s)
+        appLogger.debug('Host sandbox namespace: {}'.format(self.proc.pid))
+        self.pid_parent=self.proc.pid
+        time.sleep(0.1)
 
-    def run_queue(self, queued_cmds, ignore_history=True):
+        parentID = self.pid_parent
+        childID = parentID
+        while True:
+
+            appLogger.debug('Parent PID: {}'.format(parentID))
+            appLogger.debug('Child PID: {}'.format(childID))
+            try:
+                parentID, childID = self.getChildID(childID)
+                self.pid_child = childID
+            except:
+                break
+            time.sleep(0.1)
+
+            appLogger.debug('---')
+
+        return self.pid_parent, self.pid_child
+
+    def getChildID(self, this_pid):
+
+        child_pid_path = '/proc/{}/task/{}/children'.format(this_pid, this_pid)
+        appLogger.debug('Querying: {}'.format(child_pid_path))
+        with open(child_pid_path, 'r') as _file:
+            _content = _file.read()
+            appLogger.debug('Content: "{}"'.format(_content))
+            child_pid = int(_content)
+            appLogger.debug('PID: {}'.format(child_pid))
+
+        return this_pid, child_pid
+
+    def getSharePaths(self):
         '''
-        Run a set of commands within a pty
+        This is a list of directories to be mounted into the sandbox from the host
         '''
+        return ['/home', '/tmp', '/dev', '/etc/resolv.conf', '/cvmfs', '/scratch', '/Data', '/localdisk', '/sys', '/etc/localtime',
+                '/usr/bin/nvidia-smi', #'/usr/lib64/libnvidia-ml.so', '/usr/lib64/libnvidia-ml.so.1', '/usr/lib64/libnvidia-ml.so.545.23.08',
+                '/etc/ld.so.conf.d/ld.wsl.conf', '/usr/lib/wsl', '/usr/bin/nvidia-modprobe']
+
+    def mountHost(self):
+        '''
+        Mount the shared paths between the host and the sandbox namespace
+        '''
+        host_mounts = self.getSharePaths()
+
+        for host_path in host_mounts:
+
+            sandbox_path = os.path.abspath(os.path.join(self.sandboxPath, '.'+host_path))
+
+            if not os.path.exists(host_path):
+                appLogger.info('Skipping path {}, as it doesn\'t exist on the host'.format(host_path))
+                continue
+            if not os.path.exists(sandbox_path):
+                appLogger.info('Skipping path {}, as it doesn\'t exist on the guest'.format(sandbox_path))
+                continue
+
+            appLogger.debug('Bind Mounting: {} as: {}'.format(host_path, sandbox_path))
+
+            mount_proc = subprocess.Popen(
+                            'nsenter --preserve-credentials --user --mount --pid -t {} mount --rbind --make-rslave {} {}'.format(
+                                self.pid_child, host_path, sandbox_path),
+                            stdin = subprocess.PIPE,
+                            stdout = subprocess.PIPE,
+                            stderr = subprocess.PIPE,
+                            shell=True)
+
+            del mount_proc
+
+    def cleanupSpaces(self):
+        '''
+        Cleanup the 'persistent' spaces which have been created
+        '''
+        # restore tty settings back
+        os.write(sys.stdin.fileno(), '\n\r'.encode())
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.old_i_tty)
+        sys.stdin.flush()
+        sys.stdout.flush()
+        del self.proc
+        self.proc = None
+
+    def setupSubSpace(self, asRoot):
+        '''
+        Create a subSpace within the root space of the host
+        '''
+        appLogger.debug('Setting up SubSpace')
+
+        chroot_cmd = self._getSandboxCmd(None, asRoot)
+
+        self.proc2 = subprocess.Popen(chroot_cmd,
+                                     shell=True, preexec_fn=os.setsid,
+                                     stdin = subprocess.PIPE,
+                                     stdout = subprocess.PIPE,
+                                     stderr = subprocess.PIPE,
+                                     universal_newlines = True)
+
+        appLogger.debug('PID of subSpace: {}'.format(self.proc2.pid))
+
+        self.pid_subParent=self.proc2.pid
+
+        time.sleep(0.1)
+
+        with open('/proc/{}/task/{}/children'.format(self.pid_subParent, self.pid_subParent), 'r') as _file:
+            self.pid_subChild=int(_file.read())
+            appLogger.debug('Child PID: {}'.format(self.pid_subChild))
+
+        return (self.pid_subParent, self.pid_subChild)
+
+    def _getSandboxCmd(self, command=None, asRoot=False):
+
+        if command is None:
+            command = '/bin/bash -l'
+    
+        if not self.compatV1:
+            # Continue as Normal and use good hosts unshare
+            if asRoot:
+                chroot_cmd = 'bash -c \'unshare -priUmf --mount --mount-proc -R {} --propagation=unchanged bash -c {};\' exit $?'.format(self.sandboxPath, command)
+            else:
+                chroot_cmd = 'bash -c \'unshare -piUmf --mount --mount-proc -R {} --propagation=unchanged bash -c {};\' exit $?'.format(self.sandboxPath, command)
+        else:
+            # Use the older compatibility mode for the sandbox, use chroot and drop the '-R' unshare arg...
+            # TBF for HEP it was clear as day AL9 wa going to be the way forward in 202x, but some people are still on CO8/R8... _sigh_ ...
+            if asRoot:
+                chroot_cmd = 'bash -c \'unshare -priUmf --mount --mount-proc --propagation=unchanged chroot {} bash -c {};\' exit $?'.format(self.sandboxPath, command)
+            else:
+                chroot_cmd = 'bash -c \'unshare -piUmf --mount --mount-proc --propagation=unchanged chroot {} bash -c {};\' exit $?'.format(self.sandboxPath, command)
+    
+        return chroot_cmd
+
+    def runCommand(self, command, asRoot=False):
+        '''
+        '''        
+
+        chroot_cmd = self._getSandboxCmd(command, asRoot)
+
+        appLogger.debug('About to execute')
+        ns_cmd = 'nsenter --preserve-credentials --user --mount --pid -t {} {} ; exit $?;'
+        appLogger.debug(ns_cmd.format(self.pid_child, chroot_cmd))
 
         self._wrangle_tty()
-        self._launch_shell()
+        interactive_proc = subprocess.Popen(
+                                ns_cmd.format(self.pid_child, chroot_cmd),
+                                stdin = self.stdout_s,
+                                stdout = self.stdout_s,
+                                stderr = self.stdout_s,
+                                shell = True, universal_newlines = True, preexec_fn=os.setsid
+                                )
 
-        readable = [self.stdout_m, ]
 
-        full_cmd = ''
-
-        if type(queued_cmds) is str:
-            queued_cmds = [queued_cmds,]
-        for cmd in queued_cmds:
-
-            if type(cmd) is not str:
-                _cmd = cmd.decode()
-            else:
-                _cmd = cmd
-
-            if _cmd[-1] in ['\n',]:
-                _cmd = _cmd[:-1]
-
-            if len(full_cmd)!=0:
-                full_cmd+= ' && '
-            full_cmd += _cmd
-
-        full_cmd = full_cmd.replace('\n', ' && ')
-
-        if ignore_history and self.quiet:
-            full_cmd = 'set +o history; unset HISTFILE; ' + full_cmd
-
-        full_cmd += ' ; exit $? 2> /dev/null\n'
-
-        os.write(self.stdout_m, full_cmd.encode())
-
+        readable = [sys.stdin, self.stdout_m]
         while True:
 
             self.running = True
-            should_continue = self._shell_fwd_bck(readable)
+            should_continue = self._shell_fwd_bck(interactive_proc, readable)
 
             if not should_continue:
                 break
+        self.running=False
 
-        self._cleanup()
+        rc = interactive_proc.poll()
+        
+        appLogger.debug('Return Code: {}'.format(rc))
 
-    def _shell_fwd_bck(self, readable):
+        return rc
+
+    def runInteractive(self, asRoot=True):
+        '''
+        Launch an interactive sandbox with a shell within the 'root' sandbox namespace of the host
+        '''
+        #self.setupSubSpace(asRoot)
+        #chroot_cmd = '/bin/bash -l'
+
+        shell="/bin/bash -l"
+        #shell="bash -c '/bin/bash -i; echo $?'"
+        #shell='bash -c "/bin/bash -l;" exit $?'
+        #shell='bash -c "exit 100"; exit $?'
+        #if asRoot:
+        #    chroot_cmd = 'bash -c \'unshare -priUmf --mount-proc -R {} --propagation=unchanged {};\' exit $?'.format(self.sandboxPath, shell)
+        #else:
+        #    chroot_cmd = 'bash -c \'unshare -piUmf --mount-proc -R {} --propagation=unchanged {};\' exit $?'.format(self.sandboxPath, shell)
+
+
+        ## Keeping CO8 compatability because not everyone could read the writing on the wall with regard to Rocky vs Alma vs Oracle vs IBM re CERN/Fermilab...
+        chroot_cmd = self._getSandboxCmd(asRoot=asRoot)
+
+        appLogger.info('About to enter namespace.')
+        ns_cmd = 'nsenter --preserve-credentials --user --mount --pid -t {} {} ; exit $?;'
+        appLogger.info(ns_cmd.format(self.pid_child, chroot_cmd))
+
+        #time.sleep(300)
+
+        self._wrangle_tty()
+        interactive_proc = subprocess.Popen(
+                                ns_cmd.format(self.pid_child, chroot_cmd),
+                                stdin = self.stdout_s,
+                                stdout = self.stdout_s,
+                                stderr = self.stdout_s,
+                                shell = True, universal_newlines = True, preexec_fn=os.setsid
+                                )
+
+
+        readable = [sys.stdin, self.stdout_m]
+        while True:
+
+            self.running = True
+            should_continue = self._shell_fwd_bck(interactive_proc, readable)
+
+            if not should_continue:
+                break
+        self.running=False
+
+        rc = interactive_proc.poll()
+        
+        appLogger.debug('Return Code: {}'.format(rc))
+
+        return rc
+
+    def procState(self, pid):
+        '''
+        Return the state of a given PID in linux
+        '''
+        # Only on Linux
+        for _line in open("/proc/%d/status" % pid).readlines():
+            if _line.startswith("State:"):
+                entry = _line.split(":")[1].strip()
+                value = entry.rstrip()[0]
+                return value
+        # Unknown
+        return 'E'
+
+    def _shell_fwd_bck(self, interactive_proc, readable):
         '''
         This is the component for handling sending data in/out of the pty
         '''
 
-        if self.p and self.p.poll() is None:
+        # If the process is unknown or in a zombie state
+        if self.procState(interactive_proc.pid) in ['Z', 'E']:
+            try:
+                #os.kill(pid)
+                pass
+            except:
+                pass
+            return False
 
-            r, w, e = select.select(readable, [], [], SettingsManager.get_settings()['timeout'])
+	    # Poll for input/output
+        if interactive_proc and interactive_proc.poll() is None:
+            r, w, e = select.select(readable, [], [], 0.01)
 
             for _in in r:
                 if _in is sys.stdin:
                     d = os.read(sys.stdin.fileno(), 10240)
-                    if d.decode() in ['\x04',]:
-                        self._should_stop = True
-                        return False
+                    #if d.decode() in ['\x04',]:
+                    #    self._should_stop = True
+                    #    return False
                     os.write(self.stdout_m, d)
                 elif _in is self.stdout_m:
                     try:
                         o = os.read(self.stdout_m, 10240)
                     except OSError as e:
                         return False
-                    if o and not self.quiet:
+                    if o:
                         os.write(sys.stdout.fileno(), o)
                 else:
                     raise Exception('Help')
             return True
         else:
-
             return False
-            
-    def _cleanup(self):
-        '''
-        Some boiler-plate to cleanup after a shell has finished being used
-        '''
-
-        self.running = False
-
-        # restore tty settings back
-        termios.tcdrain(sys.stdin)
-        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.old_i_tty)
-        #sys.stdin.flush()
-        os.close(self.stdout_m)
-        self.p = None
-        self.old_i_tty = None
-        self.stdout_m = None
-        self.stdout_s = None
-        sys.stdout.flush()
-
-
-class InteractiveShell(threading.Thread, NormalSubShell):
-    '''
-    This class can launch a fully interactive shell within our instance
-    '''
-
-    def __init__(self):
-        '''
-        Setting up the requirements
-        '''
-        threading.Thread.__init__(self)
-        NormalSubShell.__init__(self, False)
-
-        self._wrangle_tty()
-        self._launch_shell()
-
-    def run(self):
-        '''
-        Start running the shell
-        '''
-        self.launch_interactive()
-
-    def stop(self):
-        '''
-        Should we try to externally stop this pty
-        '''
-        self._should_stop = True
-
-    def launch_interactive(self):
-        '''
-        Actual code for launching our interactive shell
-        '''
-
-        if not self.p:
-            self._wrangle_tty()
-            self._launch_shell()
-            self._should_stop = False
-
-        try:
-            readable = [sys.stdin, self.stdout_m]
-
-            self.running = True
-
-            while True:
-
-                should_continue = self._shell_fwd_bck(readable)
-
-                if not should_continue:
-                    self.p.kill()
-                    self.p.terminate()
-                    break
-
-                if self._should_stop:
-                    os.write(self.stdin_m, str('exit').encode())
-                    self.p.kill()
-                    self.p.terminate()
-                    break
-
-        finally:
-            self.running = False
-            self._cleanup()
-
-
-class RunCommand():
-    '''
-    Run a command in a 'clean' bash shell.
-    '''
-
-    def runCommand(thisCmd):
-        '''
-        This is a small wrapper for just running a command
-        '''
-
-        if type(thisCmd) is list:
-            _cmd = ' '.merge(thisCmd)
-        else:
-            _cmd = thisCmd
-
-        _cmd = _cmd + " ; exit $?"
-        full_cmd = ['bash', '-l', '-c', "{}".format(_cmd)]
-
-        try:
-            result = subprocess.run(full_cmd, stdout = subprocess.PIPE,
-                                              stderr = subprocess.DEVNULL)
-
-            stdout = result.stdout.decode()
-            returncode = result.returncode
-        except:
-            stdout = ''
-            returncode = -99
-
-        return stdout, returncode
-
-
-class SandboxInstaller():
-    '''
-    Class for installing a sandbox from a given image
-    '''
-            
-    def loadSingularityJSON(install_path):
-        '''
-        Lets look at a given sandbox we have found on disk
-        '''
-
-        json_path = os.path.join(install_path, '.singularity.d/labels.json')
-
-        with open(json_path, 'r') as _jsonfile:
-
-            json_data = json.load(_jsonfile)
-
-        return json_data
-
-    def build_launch_script(install_path, as_root):
-        '''
-        This method does the heavy lifting of building the activate scripts
-        '''
-
-        activate_script = '#!/bin/bash\n'
-
-        for subpath in SettingsManager.get_settings()['bind_mount_paths']:
-            local_path= subpath
-            activate_script += 'mkdir -p ' + os.path.abspath(os.path.join(install_path, '.'+subpath)) + '\n'
-
-        activate_script += '\n'
-
-        activate_script += SettingsManager.get_app_scriptEnv()
-
-        activate_script += '\n'
-        activate_script += 'unset LD_PRELOAD\n'
-        activate_script += '\n'
-
-        activate_script += 'function arg_merge() {\n'
-        activate_script += '  delim=";"      # join delimiter\n'
-        activate_script += '  oldIFS=$IFS   # save IFS, the field separator\n'
-        activate_script += '  IFS=$delim\n'
-        activate_script += '  result="$*"\n'
-        activate_script += '  IFS=$oldIFS   # restore IFS\n'
-        activate_script += '  echo $result\n'
-        activate_script += '}\n\n'
-
-        if as_root:
-            apptainer_shell_cmd = SettingsManager.get_settings()['apptainer_cmd'] + ' exec --no-mount hostfs -w -f '+install_path+' /bin/bash -l'
-        else:
-            apptainer_shell_cmd = SettingsManager.get_settings()['apptainer_cmd'] + ' exec --no-mount hostfs -w '+install_path+' /bin/bash -l'
-
-        which_cmd  = "if [[ $# -eq 0 ]]; then\n"
-        which_cmd += apptainer_shell_cmd + '\n'
-        which_cmd += "else\n"
-        which_cmd += 'argz=$(arg_merge "$@")\n'
-        which_cmd += apptainer_shell_cmd + ' -c "$argz";\n'
-        which_cmd += 'fi\n'
-
-        activate_script += which_cmd
-
-        return activate_script
-
-    def build_activate_scripts(install_path):
-        '''
-        Build the 'activate' and 'activate-asroot' scripts which allow a user to trivially enter the sandbox
-        '''
-
-        bin_dir = os.path.join(install_path, 'bin')
-
-        def _build_script(as_root=False):
-
-            if as_root:
-                script_name = 'activate-asroot'
-            else:
-                script_name = 'activate'
-            activate_script_path = os.path.join(bin_dir, script_name)
-
-
-            if not os.path.exists(activate_script_path):
-
-                if not os.path.exists(bin_dir):
-                    os.makedirs(bin_dir)
-                with open(activate_script_path, 'w') as _file:
-                    _file.write(SandboxInstaller.build_launch_script(install_path, as_root))
-
-        _build_script(as_root=False)
-        _build_script(as_root=True)
-
-    def build_singularity_env(root=None):
-        '''
-        This builds the on-disk env needed to pull an image or build a sandbox
-        '''
-
-        if not root:
-            root = os.path.dirname(SettingsManager.get_settings()['default_sandbox_path'])
-
-        if not os.path.exists(root):
-            os.makedirs(root)
-
-        image_wrk_path = SettingsManager.get_settings()['default_image_wrk_path']
-
-        for i in ['TMP','CACHE','PULL']:
-            wrk_path = os.path.join(image_wrk_path, i)
-            if not os.path.exists(wrk_path):
-                os.makedirs(wrk_path)
-
-    def checkImgStorage(install_image):
-        '''
-        This function grabs the image size from dockerhub using different API as needed
-        '''
-
-        #docker inspect -f "{{ .Size }}" 
-
-        install_image_ver = install_image.split(':')[-1]
-        try:
-            install_image_name = install_image.split(':')[-2][2:]
-        except:
-            logger.error('Image Name malformed')
-            sys.exit(11)
-
-        try:
-            img_url = "https://hub.docker.com/v2/repositories/{}/tags/{}".format(install_image_name, install_image_ver)
-            appLogger.debug('Checking URL: {}'.format(img_url))
-            image_size, rc = RunCommand.runCommand("curl -s {} | jq '.full_size'".format(img_url))
-            if rc != 0:
-                img_url = "https://hub.docker.com/v2/repositories/library/{}/tags/{}".format(install_image_name, install_image_ver)
-                appLogger.debug('Checking URL: {}'.format(img_url))
-                image_size, rc = RunCommand.runCommand("curl -s {} | jq '.full_size'".format(img_url))
-
-            image_size = int(image_size.strip())
-        except:
-            image_size = -1
-
-        appLogger.debug('Image size: {} bytes'.format(image_size))
-
-        total_free_space = 0
-
-        for i in ['TMP','CACHE','PULL']:
-
-            subpath = os.path.join(SettingsManager.get_app_env()['SCRATCH_ROOT'], i)
-
-            partition_data = os.statvfs(subpath)
-            free_space = partition_data.f_bavail * partition_data.f_frsize
-
-            appLogger.debug('Looking at Path: {}'.format(subpath))
-            appLogger.debug('Found Free Space: {} bytes'.format(free_space))
-
-            total_free_space = total_free_space + free_space
-
-        if image_size>0 and total_free_space<(image_size*3):
-
-            appLogger.error('Insufficient Space to extract image: {}'.format(install_image))
-            raise Exception('Not Enough space to downlaod and extract image')
-        
-        appLogger.debug('Space < 3 * ImageSize')
-
-        return (image_size, total_free_space)
-
-
-    def checkPathCapacity(install_path, image_size):
-        '''
-        Check we have enough storage for several copies of this container
-        '''
-
-        partition_data = os.statvfs(install_path)
-
-        free_space = partition_data.f_bavail * partition_data.f_frsize
-
-        appLogger.debug('Free Space found: {} bytes'.format(free_space))
-        appLogger.debug('Free Space needed: {} bytes'.format(image_size))
-
-        if free_space < (image_size + 10*1024*1024):
-
-            appLogger.error('Not enough space to install.')
-            raise Exception('Not enough space at: "{}" to extract image for "installation".'.format(install_path))
-
-
-    def pullImage(install_image, debug):
-        '''
-        Try to pull an image and use the cache when it's already available
-        '''
-
-        image_size, total_free_space = SandboxInstaller.checkImgStorage(install_image)
-
-        appLogger.info('Pulling Image: "{}"'.format(install_image))
-
-        shell = NormalSubShell(quiet=not debug)
-
-        apptainer = SettingsManager.get_settings()['apptainer_cmd']
-
-        cmd_queue = [SettingsManager.get_app_scriptEnv(), ]
-        cmd_queue += [SettingsManager.get_settings()['default_fuse_lib_preload'], ]
-        cmd_queue += [apptainer + ' pull "'+install_image+'"', ]
-        cmd_queue += ['unset LD_PRELOAD', ]
-
-        shell.run_queue(cmd_queue)
-
-        del shell
-
-        return image_size
-
-
-    def buildSandbox(install_path, install_image, image_size, debug):
-        '''
-        This step builds a sandbox from an image
-        '''
-
-        SandboxInstaller.checkPathCapacity(install_path, image_size)
-
-        appLogger.info('Building Sandbox at: "{}"'.format(install_path))
-
-        shell = NormalSubShell(quiet=not debug)
-
-        apptainer = SettingsManager.get_settings()['apptainer_cmd']
-
-        cmd_queue  = [SettingsManager.get_app_scriptEnv(), ]
-        cmd_queue += [SettingsManager.get_settings()['default_fuse_lib_preload'], ]
-        cmd_queue += [apptainer + ' build --force --fix-perms --sandbox --fakeroot "'+install_path+'"  "'+install_image+'"', ]
-        cmd_queue += ['unset LD_PRELOAD', ]
-
-        shell.run_queue(cmd_queue)
-
-        del shell
-
-    def fixAPTSandbox(install_path):
-        '''
-        Fix issues related to installing packages on Debian in a single-user-sandbox...
-        '''
-
-        app_conf_path = os.path.join(install_path, './etc/apt/apt.conf.d/')
-
-        if os.path.exists(app_conf_path):
-
-            fix_apt  = 'APT::Sandbox::User "root";\nAPT::Sandbox::Verify "0";\n'
-            fix_apt += 'APT::Sandbox::Verify::IDs "0";\nAPT::Sandbox::Verify::Groups "0";\n'
-            fix_apt += 'APT::Sandbox::Verify::Regain "0";'
-
-            with open(os.path.join(app_conf_path, 'sandbox-disable'), 'w+') as _file:
-                _file.write(fix_apt)
-
-
-    def fixCommands(install_path):
-        '''
-        Fix certain commands to 'work as expected' within a sandbox.
-        '''
-
-        def fixDeactivate():
-            deac_script = os.path.join(install_path, 'etc/profile.d/deac.sh')
-            with open(deac_script, 'w+') as _file:
-                _file.write('alias deactivate=exit')
-
-            st = os.stat(deac_script)
-            os.chmod(deac_script, st.st_mode | stat.S_IEXEC)
-
-        def fixSUDO():
-            sudo_script = os.path.join(install_path, 'etc/profile.d/sudo.sh')
-            with open(sudo_script, 'w+') as _file:
-                _file.write('alias sudo="source '+os.path.join(install_path, 'bin/activate-asroot')+'"')
-            st = os.stat(sudo_script)
-            os.chmod(sudo_script, st.st_mode | stat.S_IEXEC)
-
-        fixDeactivate()
-        fixSUDO()
-
-
-    def fixPaths(install_path):
-        '''
-        Fix missing paths and files from the container
-        '''
-
-        for _folder in SettingsManager.get_settings()['bind_mount_paths']:
-
-            _folder = './'+_folder
-
-            bind_folder = os.path.join(install_path, _folder)
-
-            if not os.path.exists(bind_folder):
-                os.makedirs(bind_folder)
-
-        for _file in ['etc/hosts', 'etc/localtime', 'etc/resolv.conf', 'etc/passwd', 'etc/group']:
-            touch_file = os.path.join(install_path, _file)
-            if not os.path.exists(touch_file):
-                with open(touch_file, 'a'):
-                    os.utime(touch_file, None)
-        for _folder in ['dev', 'proc', 'sys', 'tmp', 'var/tmp']:
-            folder_path = os.path.join(install_path, _folder)
-            if not os.path.exists(folder_path):
-                os.makedirs(folder_path)
-
-    def fixupSandbox(install_path):
-        '''
-        Apply fixes to the sandboxes to allow non-complex namespaces to work
-        '''
-
-        appLogger.info('Fixing Sandbox: "{}"'.format(install_path))
-
-        SandboxInstaller.fixPaths(install_path)
-
-        SandboxInstaller.build_activate_scripts(install_path)
-
-        SandboxInstaller.fixAPTSandbox(install_path)
-
-        SandboxInstaller.fixCommands(install_path)
 
 
 class appBoxManager():
-    '''
-    Manager for new shell/sandbox environments
-    '''
+    
+    def setLogLevel(level):
 
-    def create_new_appenv(install_path, install_image, debug):
-        '''
-        Build the environment to be used by a sandbox, containing all of the settings to startup the shell
-        '''
+        global appLogger
+        appLogger = logging.getLogger('appBox')
 
-        if os.path.exists(install_path):
-            appLogger.debug('Found Container at "{}", skipping install.'.format(install_path))
-            try:
-                json_data = SandboxInstaller.loadSingularityJSON(install_path)
-                container_label = json_data['org.label-schema.usage.singularity.deffile.bootstrap']+'://'+json_data['org.label-schema.usage.singularity.deffile.from']
-                appLogger.info('Image {}, found in container {}'.format(container_label, install_path))
-            except:
-                appLogger.error('Container at: "{}" malformed'.format(install_path))
-                sys.exit(10)
-            return
-
-        appLogger.info('appBox Apptainer Sandbox Installer')
-
-        # Needed for CACHE/TMP folders
-        SandboxInstaller.build_singularity_env(install_path)
-
-        def get_mount_path(path):
-            path = os.path.abspath(path)
-            while not os.path.ismount(path):
-                path = os.path.dirname(path)
-            return path
-
-        install_mount = get_mount_path(install_path)
-
-        if install_mount != '/':
-            bind_paths = SettingsManager.get_settings()['bind_mount_paths']
-            SettingsManager.set_setting('bind_mount_paths', bind_paths + [install_mount, ])
-
-        image_size = SandboxInstaller.pullImage(install_image, debug)
-
-        SandboxInstaller.buildSandbox(install_path, install_image, image_size, debug)
-
-        SandboxInstaller.fixupSandbox(install_path)
-
-        appLogger.info('Installed')
-
-    def build_env_script():
-        '''
-        Build the env script which captures the env in a bash syntax
-        '''
-        return SettingsManager.get_app_scriptEnv()
-
-    def header():
-        '''
-        # LOGO
-        '''
-
-        appLogger.info('                                                            ')
-        appLogger.info('░░      ░░░       ░░░       ░░░       ░░░░      ░░░  ░░░░  ░')
-        appLogger.info('▒  ▒▒▒▒  ▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒  ▒▒▒  ▒▒  ▒▒')
-        appLogger.info('▓  ▓▓▓▓  ▓▓       ▓▓▓       ▓▓▓       ▓▓▓  ▓▓▓▓  ▓▓▓▓    ▓▓▓')
-        appLogger.info('█        ██  ████████  ████████  ████  ██  ████  ███  ██  ██')
-        appLogger.info('█  ████  ██  ████████  ████████       ████      ███  ████  █')
-        appLogger.info('████████████████████████████████████████████████████████████')
-        appLogger.info('')
-
-    def start_interactive(custom_cmd=None):
-        '''
-        Wrapper call to launch and track an interactive shell/sandbox
-        '''
-
-        m=InteractiveShell()
-
-        if custom_cmd:
-            if type(custom_cmd) is str:
-                _cmd = custom_cmd.encode()
-            else:
-                _cmd = custom_cmd
-            os.write(m.stdout_m, _cmd)
-
-        m.start()
-        while m.p is not None and m.p.poll() is None:
-            time.sleep(0.05)
-        m.stop()
-        m.join()
-        os.write(sys.stdout.fileno(), '\n'.encode())
+        logging.basicConfig(level=level, format='%(message)s')
+        appLogger.setLevel(level)
+        for handler in appLogger.handlers:
+            handler.setLevel(level)
 
 
+class CmdLineParser():
+    
     def getArgsParser():
         '''
         Parse the Args passed to this instance
@@ -962,8 +904,6 @@ RH7>
                         description='This is a short tool to allow you to install a custom container image as a sandbox like "virtualenv".',
                         epilog=epilog)
 
-        default_root = SettingsManager.get_settings()['default_sandbox_path']
-
         parser.add_argument('-rc', '--run-command',
                             help='Run a given command inside a sandbox.')
 
@@ -973,15 +913,17 @@ RH7>
         parser.add_argument('-rcr', '--run-command-root',
                             help='Run a given command AS ROOT inside a sandbox.')
 
-        parser.add_argument('-ri', '--run-interactive',
-                            type=str, default=default_root,
-                            help='Launch a sandbox shell from this location.')
+        default_root = '/scratch/appBox_rcurrie/sandbox'
 
-        parser.add_argument('-rir', '--run-interactive-root',
-                            type=str, default=default_root,
-                            help='Launch a sandbox shell AS ROOT from this location.')
+        #parser.add_argument('-ri', '--run-interactive',
+        #                    type=str, default=default_root,
+        #                    help='Launch a sandbox shell from this location.')
 
-        default_image = SettingsManager.get_settings()['default_img']
+        #parser.add_argument('-rir', '--run-interactive-root',
+        #                    type=str, default=default_root,
+        #                    help='Launch a sandbox shell AS ROOT from this location.')
+
+        default_image = 'almalinux:9'
 
         parser.add_argument('-ii', '--install-image',
                             default=default_image,
@@ -997,8 +939,8 @@ RH7>
         parser.add_argument('-rar', '--run-after-root', action='store_true',
                             help='Should we drop into the new sandbox AS ROOT after installing.')
 
-        parser.add_argument('-li', '--list-images', action='store_true',
-                            help='List suggested images to "install".')
+        #parser.add_argument('-li', '--list-images', action='store_true',
+        #                    help='List suggested images to "install".')
 
         parser.add_argument('-q', '--quiet', action='store_true',
                             help='Quiet')
@@ -1006,8 +948,8 @@ RH7>
         parser.add_argument('-d', '--debug', action='store_true',
                             help='Debugging on.')
 
-        parser.add_argument('-ds', '--dump-settings', action='store_true',
-                            help='Dump settings used by this instance.')
+        #parser.add_argument('-ds', '--dump-settings', action='store_true',
+        #                    help='Dump settings used by this instance.')
 
         parser.add_argument('-l', '--launch',
                             help='Launch Interactive environment from ...')
@@ -1015,108 +957,167 @@ RH7>
         parser.add_argument('-lr', '--launch-root',
                             help='Launch Interactive environment AS ROOT, from ...')
 
+        parser.add_argument('-compat', '--compat-v1', action='store_true',
+                            help='Use the older compatibility mode for the sandbox. This allows use of a CO8 host, but has issues with mounts.')
+
         return parser
 
 
-def run_main():
+def run_sandbox(sandboxPath, asRoot, compatV1=False):
     '''
-    This is the main entry into the tool
+    Run a sandbox within a given Path as root or unknown/mapped user
     '''
 
+    try:
+        thisSandbox = sessionManager(sandboxPath, compatV1)
+        thisSandbox.setupHostSpace()
+
+        thisSandbox.mountHost()
+        rc = thisSandbox.runInteractive(asRoot)
+
+        return rc
+
+    except Exception as err:
+        appLogger.error('Exception during running appBox Shell: {}'.format(err))
+        raise
+    finally:
+        thisSandbox.cleanupSpaces()
+
+
+def run_command(sandboxPath, command, asRoot, compatV1=False):
+    '''
+    Run a command within a sandbox
+    '''
+
+    try:
+        thisSandbox = sessionManager(sandboxPath, compatV1)
+        thisSandbox.setupHostSpace()
+
+        thisSandbox.mountHost()
+        rc = thisSandbox.runCommand(command, asRoot)
+
+        return rc
+
+    except Exception as err:
+        appLogger.error('Exception during running appBox Shell: {}'.format(err))
+        raise
+    finally:
+        thisSandbox.cleanupSpaces()
+
+
+def main():
+    '''
+    Main :) Hello
+    '''
+    
     ### Parse our args and steer
-    parser = appBoxManager.getArgsParser()
-
+    parser = CmdLineParser.getArgsParser()
     parsed_args = parser.parse_args(sys.argv[1:])
 
-    if parsed_args.list_images:
-        pprint.pprint(SettingsManager.get_settings()['default_mappings'])
-        sys.exit(0)
-
-    if parsed_args.dump_settings:
-
-        all_settings = SettingsManager.get_settings() 
-        pprint.pprint(all_settings)
-        sys.exit(0)
-
-    ### Logging
-
-    def setLogLevel(level):
-
-        global appLogger
-        appLogger = logging.getLogger('appBox')
-
-        logging.basicConfig(level=level, format='%(message)s')
-        appLogger.setLevel(level)
-        for handler in appLogger.handlers:
-            handler.setLevel(level)
-
     if parsed_args.quiet:
-        setLogLevel(logging.ERROR)
+        appBoxManager.setLogLevel(logging.ERROR)
     elif parsed_args.debug:
-        setLogLevel(logging.DEBUG)
+        appBoxManager.setLogLevel(logging.DEBUG)
     else:
-        setLogLevel(logging.INFO)
+        appBoxManager.setLogLevel(logging.INFO)
 
+    appLogger.debug('')
     appLogger.debug('Debugging Enabled. Jolan tru.')
-    appBoxManager.header()
+    appLogger.debug('')
 
 
-    ### Launch a shell from an existing sandbox
+    command_to_run = None
+    asRoot = False
+    compatV1 = False
+    wanted_dest = None
+    should_run = False
+    needToInstall = False
 
-    if parsed_args.launch or parsed_args.launch_root:
+    if parsed_args.compat_v1:
+        compatV1 = True
 
-        install_path = parsed_args.launch or parsed_args.launch_root
-        try:
-            json_data = SandboxInstaller.loadSingularityJSON(install_path)
-            container_label = json_data['org.label-schema.usage.singularity.deffile.bootstrap']+'://'+json_data['org.label-schema.usage.singularity.deffile.from']
-            appLogger.debug('Launching "{}" from "{}"'.format(container_label, parsed_args.launch))
-        except:
-            pass
+    wanted_image = parsed_args.install_image
+    if parsed_args.install_path:
+        wanted_dest = parsed_args.install_path
+        needToInstall = True
 
-        _launch_cmd = 'source '+os.path.join(parsed_args.launch, 'bin/activate')
-        if parsed_args.launch_root:
-            _launch_cmd = _launch_cmd + '-asroot';
-        _launch_cmd = _launch_cmd + ';\n'
+    if parsed_args.run_command:
+        command_to_run = parsed_args.run_command
+        should_run = True
+    if parsed_args.run_command_root:
+        command_to_run = parsed_args.run_command_root
+        asRoot = True
+        should_run = True
 
-        appBoxManager.start_interactive(_launch_cmd)
-        sys.exit(0)
+    if parsed_args.launch:
+        wanted_dest = parsed_args.launch
+        should_run = True
+    if parsed_args.launch_root:
+        wanted_dest = parsed_args.launch_root
+        asRoot = True
+        should_run = True
+        
+    if parsed_args.run_after:
+        should_run = True
+    if parsed_args.run_after_root:
+        asRoot = True
+        should_run = True
+        
+    #if parsed_args.run_interactive:
+    #    wanted_dest = parsed_args.run_interactive
+    #    should_run = True
+    #if parsed_args.run_interactive_root:
+    #    wanted_dest = parsed_args.run_interactive_root
+    #    asRoot = True
+    #    should_run = True
+        
+    if parsed_args.run_path:
+        wanted_dest = parsed_args.run_path
+        should_run = True
+
+    if not os.path.exists(wanted_dest):        
+        appLogger.info('Sandbox: "{}" does not exist.'.format(wanted_dest))
+        appLogger.info('Installing: "{}" at "{}"'.format(wanted_image, wanted_dest))
+        needToInstall = True
 
 
-    ### Download, extract and fix
+    if needToInstall:
 
-    if parsed_args.install_image or parsed_args.install_path:
+        ## TODO
+        ## Add some way of handling images from other sources
+        ## This should identify docker images from docker://
+        ## This will probably involve adding additional classes for Quay, Singularity, etc.
+        ## Can safely default to assume most users just want a docker image
 
-        this_image = SettingsManager.get_this_image(parsed_args.install_image)
+        # Construct Manager
+        image_manager = DockerHub()
+        
+        # Get data about which image we're about to pull
+        image_name = wanted_image.split(':')[0]
+        image_tag = wanted_image.split(':')[1]
 
-        this_path = os.path.abspath(parsed_args.install_path)
+        # Pull the image from the source to a temp folder
+        image_manager.pullContainer(image_name, image_tag)
 
-        appBoxManager.create_new_appenv(this_path, this_image, parsed_args.debug)
+        # Extract the image to the destination path
+        image_manager.buildSandbox(image_name, image_tag, wanted_dest)
+        
+        thisSandbox = sandboxFixes(wanted_dest)
+        thisSandbox.applyAllFixes()
 
-
-    ### Activate the sandbox we just found
-
-    if parsed_args.run_after or parsed_args.run_command:
-        _user_cmd = 'source '+os.path.join(parsed_args.install_path, 'bin/activate')
-        if parsed_args.run_command:
-            _user_cmd = _user_cmd + ' "' + parsed_args.run_command.replace('"','\\"').replace('\'','\\\'') + '"\n'
-            rc = NonSubShell.run_command(_user_cmd)
-            sys.exit(rc)
-        else:
-            _user_cmd = _user_cmd + '\n'
-            appBoxManager.start_interactive(_user_cmd)
-    elif parsed_args.run_after_root or parsed_args.run_command_root:
-        _root_cmd = 'source '+os.path.join(parsed_args.install_path, 'bin/activate-asroot')
-        if parsed_args.run_command_root:
-            _root_cmd = _root_cmd + ' "' + parsed_args.run_command_root.replace('"','\\"').replace('\'','\\\'') + '"\n'
-            rc = NonSubShell.run_command(_root_cmd)
-            sys.exit(rc)
-        else:
-            _root_cmd = _root_cmd + '\n'
-            appBoxManager.start_interactive(_root_cmd)
-
+    if should_run:
+    
+        if command_to_run:
+            command_to_run = '" ' + command_to_run + ' "'
+    
+        # We now plan to run a command or launch a shell
+        rc = run_command(wanted_dest, command_to_run, asRoot, compatV1)
+        sys.exit(rc)
+        
     sys.exit(0)
 
 
 if __name__ == '__main__':
-    run_main()
+    main()
+
 

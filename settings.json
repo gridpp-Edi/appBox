@@ -1,0 +1,51 @@
+{
+  "apptainer_cmd": "/usr/bin/apptainer",
+  "bind_mount_paths": [
+    "/cvmfs",
+    "/scratch",
+    "/localdisk",
+    "/Data",
+    "/mnt"
+  ],
+  "copy_from_host": [
+    "LC_ALL",
+    "LANG",
+    "LANGUAGE",
+    "PS1"
+  ],
+  "default_fuse_lib_preload": "",
+  "default_image_wrk_path": "/scratch/appBox_rcurrie",
+  "default_img": "docker://almalinux:9",
+  "default_mappings": {
+    "Alma8": "docker://almalinux:8",
+    "Alma9": "docker://almalinux:9",
+    "CO6": "docker://centos:centos6",
+    "CO7": "docker://centos:centos7",
+    "CO8": "docker://almalinux:8",
+    "EL7": "docker://centos:centos7",
+    "EL8": "docker://almalinux:8",
+    "EL9": "docker://almalinux:9",
+    "PyTorch21CUDA11": "docker://pytorch/pytorch:2.2.2-cuda11.8-cudnn8-runtime",
+    "PyTorch21CUDA12": "docker://pytorch/pytorch:2.1.2-cuda12.1-cudnn8-runtime",
+    "PyTorch22CUDA11": "docker://pytorch/pytorch:2.2.2-cuda11.8-cudnn8-runtime",
+    "PyTorch22CUDA12": "docker://pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime",
+    "Rocky8": "docker://rockylinux:8",
+    "Rocky9": "docker://rockylinux:9",
+    "SL7": "docker://centos:centos7",
+    "TF214": "docker://tensorflow/tensorflow:2.14.0-gpu-jupyter",
+    "TF215": "docker://tensorflow/tensorflow:2.15.0-gpu-jupyter",
+    "TF216": "docker://tensorflow/tensorflow:2.16.1-gpu-jupyter",
+    "Ubuntu": "docker://ubuntu:22.04",
+    "Ubuntu16": "docker://ubuntu:16.04",
+    "Ubuntu18": "docker://ubuntu:18.04",
+    "Ubuntu20": "docker://ubuntu:20.04",
+    "Ubuntu22": "docker://ubuntu:22.04"
+  },
+  "default_sandbox_path": "/scratch/appBox_rcurrie/appBox",
+  "exec_as_root_by_default": false,
+  "interactive_command": [
+    "/bin/bash",
+    "-i"
+  ],
+  "timeout": 0.05
+}
