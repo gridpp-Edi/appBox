@@ -40,9 +40,10 @@ def getHome():
     return pwd.getpwuid(os.getuid())[5]
 
 
-class ImageSource():
+class ImageSource:
 
     def __init__(self, defaultCacheDir=None):
+        self.proto = 'unknown'
         if defaultCacheDir:
             self.imageCacheDir = defaultCacheDir
         else:
@@ -58,7 +59,7 @@ class ImageSource():
 
     def dumpContainerInfo(self, metaData):
 
-        with open(metaData, 'r') as _file:
+        with open(metaData, 'r', encoding='utf-8') as _file:
             appBoxData = json.loads(_file.read())
 
         appLogger.info(appBoxData)
@@ -101,12 +102,15 @@ class DockerHub(ImageSource):
         Just try to list the manifest and return based on the authenticated or not
         '''
         try:
+            _headers = self.getHeaders(token)
             image_pre, image = self._getImageStr(image)
             _ = urllib.request.urlopen(urllib.request.Request(
-                    "https://{}/v2/{}/{}/manifests/{}".format(self.docker_reg, image_pre, image, "latest")
+                    "https://{}/v2/{}/{}/manifests/{}".format(self.docker_reg, image_pre, image, "latest"),
+                    headers = _headers,
                 )).read()
             return True
-        except:
+        except urllib.error.HTTPError as err:
+            appLogger.debug(err)
             return False
 
     def getToken(self, image):
@@ -253,7 +257,7 @@ class DockerHub(ImageSource):
 
         try:
             manifest_response = self.getManifests(image, tag, _headers)
-        except Exception as err:
+        except urllib.error.HTTPError as err:
             appLogger.error('Failed to get manifest for image: "{}", tag: "{}"'.format(image, tag))
             appLogger.error('Error: {}'.format(err))
             sys.exit(201)
@@ -318,7 +322,7 @@ class DockerHub(ImageSource):
         if not os.path.exists(this_image):
             appLogger.error('Expected to find (cached) image at: "{}", for image: "{}", tag: "{}".'.format(this_image, image, tag))
             appLogger.error('Did you forget to pull first?')
-            return
+            return False
 
         if not os.path.exists(dest):
             os.makedirs(dest)
@@ -326,16 +330,18 @@ class DockerHub(ImageSource):
             if os.path.exists(appBox_file):
                 appLogger.info('Found appBox sandbox at: {}'.format(dest))
                 self.dumpContainerInfo(appBox_file)
-                return
+                return False
 
         appLogger.info('Extracting Compressed Image.')
         with tarfile.open(this_image) as _tfile:
             _tfile.extractall(dest)
 
         appLogger.info('Writing metaData.')
-        with open(appBox_file, 'w+') as _file:
+        with open(appBox_file, 'w+', encoding='utf-8') as _file:
             self.writeContainerInfo(_file, image, tag)
 
+        return True
+ 
 
 class sandboxFixes():
     
@@ -345,7 +351,8 @@ class sandboxFixes():
         self.addNvidia = addNV
     
     def applyAllFixes(self):
-        
+        '''
+        '''
         self.fixFilePermissions()
         self.fixAptSandboxing()
         self.fixMissingPaths()
@@ -354,7 +361,24 @@ class sandboxFixes():
         self.fixAliases()
         self.fixEnvironment()
         self.installAppBox()
-        
+        self.copyFromHost()
+        self.fixForLies()
+
+    def applySafeFixes(self):
+        '''
+        '''
+        self.fixUserAccounts()
+        self.copyFromHost()
+
+    def copyFromHost(self):
+
+        file_list = ['/etc/resolv.conf', '/etc/hostname', '/etc/localtime', '/etc/timezone', '/etc/vimrc']
+
+        for _file in file_list:
+            if not os.path.exists(os.path.join(self.sandboxPath, '.'+_file)):
+                shutil.copyfile(_file,
+                                os.path.join(self.sandboxPath, '.'+_file))
+
     def fixFilePermissions(self):
         '''
         Fix the permissions of a given path
@@ -374,7 +398,11 @@ class sandboxFixes():
     def _getPathList(self):
         '''
         '''
-        base_path_list = ['/dev', '/etc', '/cvmfs', '/scratch', '/Data', '/localdisk', '/sys', '/tmp', '/home']
+        # This is a good fraction of the lsb because not all images follow the lsb...
+        # which means...
+        # well...
+        # yeah...
+        base_path_list = ['/dev', '/etc', '/cvmfs', '/scratch', '/Data', '/localdisk', '/sys', '/tmp', '/home', '/proc']
         
         if self.addNvidia:
             base_path_list.append('/usr/lib/wsl')
@@ -397,7 +425,7 @@ class sandboxFixes():
     def _getStubList(self):
         '''
         '''
-        base_stubs = ['/etc/resolv.conf', '/etc/localtime', '/etc/hostname']
+        base_stubs = ['/etc/resolv.conf', '/etc/hostname']
         
         if self.addNvidia:
             base_stubs.append('/usr/bin/nvidia-smi')
@@ -417,7 +445,7 @@ class sandboxFixes():
             
         for _path in abs_paths:
             if not os.path.exists(_path):
-                with open(_path, 'a'):
+                with open(_path, 'a', encoding='utf-8'):
                     os.utime(_path, None)
 
     def getAnonUIDGID(self):
@@ -434,7 +462,7 @@ class sandboxFixes():
     def _fixPasswd(self):
         '''
         '''
-        with open(os.path.join(self.sandboxPath, './etc/passwd'), 'r') as _file:
+        with open(os.path.join(self.sandboxPath, './etc/passwd'), 'r', encoding='utf-8') as _file:
             _content = _file.read()
             appLogger.debug('Content: "{}"'.format(_content))
         
@@ -453,13 +481,13 @@ class sandboxFixes():
                 
                 new_content += '{}:x:{}:{}:{}:{}:{}\n'.format(_user, a_uid, a_gid, _name, _home, _shell)
 
-        with open(os.path.join(self.sandboxPath, './etc/passwd'), 'w+') as _file:
+        with open(os.path.join(self.sandboxPath, './etc/passwd'), 'w+', encoding='utf-8') as _file:
             _file.write(new_content)
     
     def _fixGroup(self):
         '''
         '''
-        with open(os.path.join(self.sandboxPath, './etc/group'), 'r') as _file:
+        with open(os.path.join(self.sandboxPath, './etc/group'), 'r', encoding='utf-8') as _file:
             _content = _file.read()
             appLogger.debug('Content: "{}"'.format(_content))
 
@@ -477,14 +505,18 @@ class sandboxFixes():
 
                 new_content += '{}:x:{}:{}\n'.format(_group, a_gid, _users)
                 
-        with open(os.path.join(self.sandboxPath, './etc/group'), 'w+') as _file:
+        with open(os.path.join(self.sandboxPath, './etc/group'), 'w+', encoding='utf-8') as _file:
             _file.write(new_content)
     
     def fixAliases(self):
-        
+
+        alias_path = os.path.join(self.sandboxPath, 'etc/profile.d')
+        if not os.path.exists(alias_path):
+            os.makedirs(alias_path)
+
         def fixDeactivate():
-            deac_script = os.path.join(self.sandboxPath, 'etc/profile.d/deac.sh')
-            with open(deac_script, 'w+') as _file:
+            deac_script = os.path.join(alias_path, 'deac.sh')
+            with open(deac_script, 'w+', encoding='utf-8') as _file:
                 _file.write('alias deactivate=exit')
 
             st = os.stat(deac_script)
@@ -495,7 +527,7 @@ class sandboxFixes():
     def fixEnvironment(self):
         
         if self.addNvidia:
-            with open(os.path.join(self.sandboxPath, './etc/ld.so.conf.d/ld.wsl.conf')) as _file:
+            with open(os.path.join(self.sandboxPath, './etc/ld.so.conf.d/ld.wsl.conf'), 'w+', encoding='utf-8') as _file:
                 _file.write('/usr/lib/wsl/lib')
 
     def fixAptSandboxing(self):
@@ -513,6 +545,15 @@ class sandboxFixes():
 
             with open(os.path.join(app_conf_path, 'sandbox-disable'), 'w+') as _file:
                 _file.write(fix_apt)
+
+            ## Hack of a hack...
+            ## cp /usr/bin/true /usr/bin/dpkg-statoverride
+
+            shutil.copyfile(os.path.join(self.sandboxPath, 'usr/bin/true'),
+                            os.path.join(self.sandboxPath, 'usr/bin/dpkg-statoverride'))
+
+            shutil.copyfile(os.path.join(self.sandboxPath, 'usr/bin/true'),
+                            os.path.join(self.sandboxPath, 'bin/dpkg-statoverride'))
 
     def installAppBox(self):
         '''
@@ -538,6 +579,19 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
             st = os.stat(_file)
             os.chmod(_file, st.st_mode | stat.S_IEXEC)
 
+    def fixForLies(self):
+        '''
+        '''
+
+        ## TODO decide if this is a bad idea or not...
+        ## Intention here is to 'stop' automated tooling from trying to do something bad within the sandbox
+        ## This has the side-effect of stopping people changing a file so that they can't so anything with it
+
+        for _file in ['/usr/bin/chown', '/usr/bin/chmod', '/bin/chown', '/bin/chmod']:
+            shutil.copyfile(os.path.join(self.sandboxPath, 'usr/bin/true'),
+                            os.path.join(self.sandboxPath, '.'+_file))
+            shutil.copyfile(os.path.join(self.sandboxPath, 'usr/bin/true'),
+                            os.path.join(self.sandboxPath, '.'+_file))
 
 class sessionManager():
 
@@ -552,6 +606,13 @@ class sessionManager():
         self.sandboxPath = sandboxPath
         self.compatV1 = compatV1
         self.addNvidia = addNV
+
+        self.stdout_m, self.stdout_s = None, None
+        self.pid_subParent = None
+        self.running = False
+
+        self.proc2 = None
+        self.pid_subChild, self.pid_subParent = None, None
 
     def _wrangle_tty(self):
         '''
@@ -581,7 +642,10 @@ class sessionManager():
         '''
 
         background_task='/bin/bash'
-        self.proc = subprocess.Popen("unshare -primf --propagation unchanged {}".format(background_task),
+        appLogger.debug('Launching host namespace manager')
+        host_manager="unshare -primf --propagation unchanged {}".format(background_task)
+        appLogger.debug(host_manager)
+        self.proc = subprocess.Popen(host_manager,
                                      shell=True, preexec_fn=os.setsid,
                                      stdin = subprocess.PIPE,
                                      stdout = subprocess.PIPE,
@@ -625,7 +689,7 @@ class sessionManager():
         '''
         This is a list of directories to be mounted into the sandbox from the host
         '''
-        mounts = ['/home', '/tmp', '/dev', '/etc/resolv.conf', '/cvmfs', '/scratch', '/Data', '/localdisk', '/sys', '/etc/localtime',]
+        mounts = ['/home', '/tmp', '/dev', '/cvmfs', '/scratch', '/Data', '/localdisk', '/sys', ]
         if self.addNvidia:
             mounts += ['/usr/lib/wsl', '/usr/bin/nvidia-smi', '/usr/bin/nvidia-modprobe']
         return mounts
@@ -701,21 +765,24 @@ class sessionManager():
     def _getSandboxCmd(self, command=None, asRoot=False):
 
         if command is None:
-            command = '"/bin/bash -l"'
+            if os.path.exists(os.path.join(self.sandboxPath, 'bin/bash')):
+                command = '/bin/bash -l'
+            else:
+                command = '/bin/sh'
     
         if not self.compatV1:
             # Continue as Normal and use good hosts unshare
             if asRoot:
-                chroot_cmd = 'bash -c \'unshare -priUmf --mount --mount-proc -R {} --propagation=unchanged bash -c {};\' exit $?'.format(self.sandboxPath, command)
+                chroot_cmd = 'bash -c \'unshare -priUmf --mount --mount-proc -R {} --propagation=unchanged {};\' exit $?'.format(self.sandboxPath, command)
             else:
-                chroot_cmd = 'bash -c \'unshare -piUmf --mount --mount-proc -R {} --propagation=unchanged bash -c {};\' exit $?'.format(self.sandboxPath, command)
+                chroot_cmd = 'bash -c \'unshare -piUmf --mount --mount-proc -R {} --propagation=unchanged {};\' exit $?'.format(self.sandboxPath, command)
         else:
             # Use the older compatibility mode for the sandbox, use chroot and drop the '-R' unshare arg...
             # TBF for HEP it was clear as day AL9 wa going to be the way forward in 202x, but some people are still on CO8/R8... _sigh_ ...
             if asRoot:
-                chroot_cmd = 'bash -c \'unshare -priUmf --mount --mount-proc --propagation=unchanged chroot {} bash -c {};\' exit $?'.format(self.sandboxPath, command)
+                chroot_cmd = 'bash -c \'unshare -priUmf --mount --mount-proc --propagation=unchanged chroot {} {};\' exit $?'.format(self.sandboxPath, command)
             else:
-                chroot_cmd = 'bash -c \'unshare -piUmf --mount --mount-proc --propagation=unchanged chroot {} bash -c {};\' exit $?'.format(self.sandboxPath, command)
+                chroot_cmd = 'bash -c \'unshare -piUmf --mount --mount-proc --propagation=unchanged chroot {} {};\' exit $?'.format(self.sandboxPath, command)
     
         return chroot_cmd
 
@@ -762,7 +829,7 @@ class sessionManager():
         #self.setupSubSpace(asRoot)
         #chroot_cmd = '/bin/bash -l'
 
-        shell="/bin/bash -l"
+        #shell="/bin/bash -l"
         #shell="bash -c '/bin/bash -i; echo $?'"
         #shell='bash -c "/bin/bash -l;" exit $?'
         #shell='bash -c "exit 100"; exit $?'
@@ -836,7 +903,7 @@ class sessionManager():
 
 	    # Poll for input/output
         if interactive_proc and interactive_proc.poll() is None:
-            r, w, e = select.select(readable, [], [], 0.01)
+            r, _w, _e = select.select(readable, [], [], 0.01)
 
             for _in in r:
                 if _in is sys.stdin:
@@ -849,6 +916,7 @@ class sessionManager():
                     try:
                         o = os.read(self.stdout_m, 10240)
                     except OSError as e:
+                        appLogger.debug('Error: {}'.format(e))
                         return False
                     if o:
                         os.write(sys.stdout.fileno(), o)
@@ -861,7 +929,7 @@ class sessionManager():
 
 class appBoxManager():
     
-    def setLogLevel(level):
+    def setLogLevel(self, level):
 
         global appLogger
         appLogger = logging.getLogger('appBox')
@@ -872,9 +940,9 @@ class appBoxManager():
             handler.setLevel(level)
 
 
-class CmdLineParser():
+class CmdLineParser:
     
-    def getArgsParser():
+    def getArgsParser(self):
         '''
         Parse the Args passed to this instance
         '''
@@ -1045,15 +1113,15 @@ def main():
     '''
     
     ### Parse our args and steer
-    parser = CmdLineParser.getArgsParser()
+    parser = CmdLineParser().getArgsParser()
     parsed_args = parser.parse_args(sys.argv[1:])
 
     if parsed_args.quiet:
-        appBoxManager.setLogLevel(logging.ERROR)
+        appBoxManager().setLogLevel(logging.ERROR)
     elif parsed_args.debug:
-        appBoxManager.setLogLevel(logging.DEBUG)
+        appBoxManager().setLogLevel(logging.DEBUG)
     else:
-        appBoxManager.setLogLevel(logging.INFO)
+        appBoxManager().setLogLevel(logging.INFO)
 
     appLogger.debug('')
     appLogger.debug('Debugging Enabled. Jolan tru.')
@@ -1120,6 +1188,8 @@ def main():
         needToInstall = True
 
 
+    rc = False
+
     if needToInstall:
 
         ## TODO
@@ -1139,10 +1209,13 @@ def main():
         image_manager.pullContainer(image_name, image_tag)
 
         # Extract the image to the destination path
-        image_manager.buildSandbox(image_name, image_tag, wanted_dest)
+        rc = image_manager.buildSandbox(image_name, image_tag, wanted_dest)
         
-        thisSandbox = sandboxFixes(wanted_dest, addNV)
-        thisSandbox.applyAllFixes()
+    thisSandbox = sandboxFixes(wanted_dest, addNV)
+    #if rc:
+    thisSandbox.applyAllFixes()
+    #else:
+    #    thisSandbox.applySafeFixes()
 
     if should_run:
     
