@@ -299,7 +299,7 @@ class DockerHub(ImageSource):
                         _file.write(chunk)
 
         assembled_image = self._assembleImage(image_layers, output_image)
-        
+
         appLogger.info('Image assembled at: %s', assembled_image)
 
         #def cleanUp(to_be_removed):
@@ -341,18 +341,18 @@ class DockerHub(ImageSource):
             self.writeContainerInfo(_file, image, tag)
 
         return True
- 
+
 
 class sandboxFixes():
-    
-    def __init__(self, addNV, sandbox_instance):
-        
-        #self.sandboxPath = sandboxPath
-        self.addNvidia = addNV
+
+    def __init__(self, add_nv, sandbox_instance):
+
+        #self.sandbox_path = sandbox_path
+        self.add_nvidia = add_nv
         self.sandbox_instance = sandbox_instance
-        
+
         self.tmpPath = '/tmp'
-    
+
     def applyAllFixes(self):
         '''
         '''
@@ -378,20 +378,20 @@ class sandboxFixes():
         file_list = ['/etc/resolv.conf', '/etc/hostname', '/etc/localtime', '/etc/timezone', '/etc/vimrc']
 
         for _file in file_list:
-            self.sandbox_instance.copyFileFromHost(_file, os.path.abspath(os.path.join(self.sandbox_instance.getSandboxPath(), '.'+_file)))
+            self.sandbox_instance.copyFileFromHost(_file, os.path.abspath(os.path.join(self.sandbox_instance.getsandbox_path(), '.'+_file)))
         #else:
         #    for _file in file_list:
-        #        if not os.path.exists(os.path.join(self.sandboxPath, '.'+_file)):
+        #        if not os.path.exists(os.path.join(self.sandbox_path, '.'+_file)):
         #            shutil.copyfile(_file,
-        #                            os.path.join(self.sandboxPath, '.'+_file))
+        #                            os.path.join(self.sandbox_path, '.'+_file))
 
     def fixFilePermissions(self):
         '''
         Fix the permissions of a given path
         '''
-        if self.sandbox_instance.rootFS:
+        if self.sandbox_instance.rootfs:
             return
-        for root, dirs, files in os.walk(self.sandbox_instance.getSandboxPath(), topdown=True):
+        for root, dirs, files in os.walk(self.sandbox_instance.getsandbox_path(), topdown=True):
             for _dir in dirs:
                 this_path = os.path.join(root,_dir)
                 if not os.path.islink(this_path):
@@ -411,11 +411,11 @@ class sandboxFixes():
         # well...
         # yeah...
         base_path_list = ['/dev', '/etc', '/cvmfs', '/scratch', '/Data', '/localdisk', '/sys', '/tmp', '/home', '/proc']
-        
-        if self.addNvidia:
+
+        if self.add_nvidia:
             base_path_list.append('/usr/lib/wsl')
-            
-        return base_path_list        
+
+        return base_path_list
 
     def fixMissingPaths(self):
         '''
@@ -424,17 +424,17 @@ class sandboxFixes():
 
         abs_paths = []
         for _path in needed_sandbox_paths:
-            abs_paths.append(os.path.abspath(os.path.join(self.sandbox_instance.getSandboxPath(), '.'+_path)))
+            abs_paths.append(os.path.abspath(os.path.join(self.sandbox_instance.getsandbox_path(), '.'+_path)))
 
         for _path in abs_paths:
-            self.sandbox_instance.createSandboxPath(_path)
+            self.sandbox_instance.createsandbox_path(_path)
 
     def _getStubList(self):
         '''
         '''
         base_stubs = ['/etc/resolv.conf', '/etc/hostname']
-        
-        if self.addNvidia:
+
+        if self.add_nvidia:
             base_stubs.append('/usr/bin/nvidia-smi')
             base_stubs.append('/usr/bin/nvidia-modprobe')
 
@@ -445,10 +445,10 @@ class sandboxFixes():
         Create the stubs needed for the sandbox
         '''
         needed_stubs = self._getStubList()
-        
+
         abs_paths = []
         for _path in needed_stubs:
-            abs_paths.append(os.path.abspath(os.path.join(self.sandbox_instance.getSandboxPath(), '.'+_path)))            
+            abs_paths.append(os.path.abspath(os.path.join(self.sandbox_instance.getsandbox_path(), '.'+_path)))
 
         for _path in abs_paths:
             self.sandbox_instance.createSandboxEmptyFile(_path)
@@ -461,7 +461,7 @@ class sandboxFixes():
         '''
         Fix the user accounts within the sandbox
         '''
-        tmp_passwd_file = os.path.join(self.tmpPath, 'passwd_{}'.format(str(uuid.uuid4())[:8])) 
+        tmp_passwd_file = os.path.join(self.tmpPath, 'passwd_{}'.format(str(uuid.uuid4())[:8]))
         try:
             self._fixPasswd(tmp_passwd_file)
         finally:
@@ -476,11 +476,11 @@ class sandboxFixes():
         '''
         '''
         self.sandbox_instance.copyFileToHost('/etc/passwd', tmp_passwd_file)
-        
+
         with open(tmp_passwd_file, 'r', encoding='utf-8') as _file:
             _content = _file.read()
             appLogger.debug('Content: "%s"', _content)
-        
+
         new_content = 'root:x:0:0:root:/root:/bin/bash\n'
         new_content += '{}:x:65534:65534:{}:{}:/bin/bash\n'.format(getUN(),getUN(),getHome())
 
@@ -493,13 +493,13 @@ class sandboxFixes():
                     continue
                 appLogger.debug('User: "%s", UID: "%s", GID: "%s", Name: "%s", Home: "%s", Shell: "%s"',
                                     _user, _uid, _gid, _name, _home, _shell)
-                
+
                 new_content += '{}:x:{}:{}:{}:{}:{}\n'.format(_user, a_uid, a_gid, _name, _home, _shell)
 
         with open(tmp_passwd_file, 'w+', encoding='utf-8') as _file:
             _file.write(new_content)
 
-        self.sandbox_instance.copyFileFromHost(tmp_passwd_file, os.path.join(self.sandbox_instance.getSandboxPath(), './etc/passwd'))
+        self.sandbox_instance.copyFileFromHost(tmp_passwd_file, os.path.join(self.sandbox_instance.getsandbox_path(), './etc/passwd'))
 
     def _fixGroup(self, tmp_group_file):
         '''
@@ -514,7 +514,7 @@ class sandboxFixes():
 
         new_content = 'root:x:0:\n'
         new_content += '{}:x:{}:\n'.format(getUN(), a_gid)
-        
+
         for _line in _content.split('\n'):
             if _line:
                 _group, _, _gid, _users = _line.split(':')
@@ -527,39 +527,39 @@ class sandboxFixes():
         with open(tmp_group_file, 'w+', encoding='utf-8') as _file:
             _file.write(new_content)
 
-        self.sandbox_instance.copyFileFromHost(tmp_group_file, os.path.join(self.sandbox_instance.getSandboxPath(), './etc/group'))
+        self.sandbox_instance.copyFileFromHost(tmp_group_file, os.path.join(self.sandbox_instance.getsandbox_path(), './etc/group'))
 
     def fixAliases(self):
 
-        self.sandbox_instance.createSandboxPath(os.path.join(self.sandbox_instance.getSandboxPath(), './etc/profile.d'))
+        self.sandbox_instance.createsandbox_path(os.path.join(self.sandbox_instance.getsandbox_path(), './etc/profile.d'))
 
         def fixDeactivate():
             tmp_deac_script = os.path.join(self.tmpPath, 'deac.sh_{}'.format(str(uuid.uuid4())[:8]))
             with open(tmp_deac_script, 'w+', encoding='utf-8') as _file:
                 _file.write('alias deactivate=exit')
 
-            self.sandbox_instance.copyFileFromHost(tmp_deac_script, os.path.join(self.sandbox_instance.getSandboxPath(), './etc/profile.d/deac.sh'))
+            self.sandbox_instance.copyFileFromHost(tmp_deac_script, os.path.join(self.sandbox_instance.getsandbox_path(), './etc/profile.d/deac.sh'))
 
         fixDeactivate()
-    
+
     def fixEnvironment(self):
-        
-        if self.addNvidia:
-            self.sandbox_instance.createSandboxPath(os.path.join(self.sandbox_instance.getSandboxPath(), './etc/ld.so.conf.d'))
+
+        if self.add_nvidia:
+            self.sandbox_instance.createsandbox_path(os.path.join(self.sandbox_instance.getsandbox_path(), './etc/ld.so.conf.d'))
             tmp_ld_path = os.path.join(self.tmpPath, 'ld.wsl.conf_{}'.format(str(uuid.uuid4())[:8]))
             with open(tmp_ld_path, 'w+', encoding='utf-8') as _file:
                 _file.write('/usr/lib/wsl/lib')
-            self.sandbox_instance.copyFileFromHost(tmp_ld_path, os.path.join(self.sandbox_instance.getSandboxPath(), './etc/ld.so.conf.d/wsl.conf'))
+            self.sandbox_instance.copyFileFromHost(tmp_ld_path, os.path.join(self.sandbox_instance.getsandbox_path(), './etc/ld.so.conf.d/wsl.conf'))
 
     def fixAptSandboxing(self):
         '''
         Fix issues related to installing packages on Debian in a single-user-sandbox...
         '''
 
-        app_conf_path = os.path.join(self.sandbox_instance.getSandboxPath(), './etc/apt/apt.conf.d/')
-        self.sandbox_instance.createSandboxPath(app_conf_path)
+        app_conf_path = os.path.join(self.sandbox_instance.getsandbox_path(), './etc/apt/apt.conf.d/')
+        self.sandbox_instance.createsandbox_path(app_conf_path)
 
-        layer_path = os.path.join(self.sandbox_instance.sandboxPath, './etc/apt/apt.conf.d/')
+        layer_path = os.path.join(self.sandbox_instance.sandbox_path, './etc/apt/apt.conf.d/')
         if os.path.exists(layer_path):
             # Only want to apply this 'fix' in sandboxes where apt is installed
 
@@ -576,35 +576,50 @@ class sandboxFixes():
             ## Hack of a hack...
             ## cp /usr/bin/true /usr/bin/dpkg-statoverride
 
-            shutil.copyfile(os.path.join(self.sandbox_instance.getSandboxPath(), 'usr/bin/true'),
-                            os.path.join(self.sandbox_instance.getSandboxPath(), 'usr/bin/dpkg-statoverride'))
+            shutil.copyfile(os.path.join(self.sandbox_instance.getsandbox_path(), 'usr/bin/true'),
+                            os.path.join(self.sandbox_instance.getsandbox_path(), 'usr/bin/dpkg-statoverride'))
 
-            shutil.copyfile(os.path.join(self.sandbox_instance.getSandboxPath(), 'usr/bin/true'),
-                            os.path.join(self.sandbox_instance.getSandboxPath(), 'bin/dpkg-statoverride'))
+            shutil.copyfile(os.path.join(self.sandbox_instance.getsandbox_path(), 'usr/bin/true'),
+                            os.path.join(self.sandbox_instance.getsandbox_path(), 'bin/dpkg-statoverride'))
 
     def installAppBox(self):
         '''
         Install the appBox tool into the sandbox
         '''
         currentInstance = os.path.abspath(__file__)
-        if not os.path.exists(os.path.join(self.sandbox_instance.sandboxPath, './bin')):
-            os.makedirs(os.path.join(self.sandbox_instance.sandboxPath, './bin'))
-        installInstance = os.path.join(self.sandbox_instance.sandboxPath, './bin/appBox')
+        if not os.path.exists(os.path.join(self.sandbox_instance.sandbox_path, './bin')):
+            os.makedirs(os.path.join(self.sandbox_instance.sandbox_path, './bin'))
+        installInstance = os.path.join(self.sandbox_instance.sandbox_path, './bin/appBox')
 
         self.sandbox_instance.copyFileFromHost(currentInstance, installInstance)
 
-        activate_script = """#!/bin/bash
+        cvmfs_args = ''
+        if self.sandbox_instance.rootfs:
+            cvmfs_args = '-cvmfs {}'.format(os.path.abspath(self.sandbox_instance.rootfs))
+
+        for _ in ['user', 'root']:
+            if _ == 'root':
+                as_string = '-rar'
+                script_name = 'activate-asroot'
+            else:
+                as_string = '-ra'
+                script_name = 'activate'
+
+            activate_script = """#!/bin/bash
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
-/bin/env python3 ./appBox -l ${SCRIPT_DIR}/../ -ra"""
-        activatePath = os.path.join(self.sandbox_instance.sandboxPath, './bin/activate')
-        with open(activatePath, 'w+', encoding='utf-8') as _file:
-            _file.write(activate_script)
+/bin/env python3 ${SCRIPT_DIR}/appBox """
+            activate_script = activate_script + cvmfs_args
+            activate_script = activate_script + " -l ${SCRIPT_DIR}/../ """ + as_string
 
-        for _file in [installInstance, activatePath, ]:
-            st = os.stat(_file)
-            os.chmod(_file, st.st_mode | stat.S_IEXEC)
+            activatePath = os.path.join(self.sandbox_instance.sandbox_path, './bin/{}'.format(script_name))
+            with open(activatePath, 'w+', encoding='utf-8') as _file:
+                _file.write(activate_script)
+
+            for _file in [installInstance, activatePath, ]:
+                st = os.stat(_file)
+                os.chmod(_file, st.st_mode | stat.S_IEXEC)
 
     def fixForLies(self):
         '''
@@ -615,15 +630,15 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
         ## This has the side-effect of stopping people changing a file so that they can't so anything with it
 
         for _file in ['/usr/bin/chown', '/usr/bin/chmod', '/bin/chown', '/bin/chmod']:
-            self.sandbox_instance.copyFileFromHost(os.path.join(self.sandbox_instance.getSandboxPath(), 'usr/bin/true'),
-                            os.path.join(self.sandbox_instance.getSandboxPath(), '.'+_file))
-            self.sandbox_instance.copyFileFromHost(os.path.join(self.sandbox_instance.getSandboxPath(), 'usr/bin/true'),
-                            os.path.join(self.sandbox_instance.getSandboxPath(), '.'+_file))
+            self.sandbox_instance.copyFileFromHost(os.path.join(self.sandbox_instance.getsandbox_path(), 'usr/bin/true'),
+                            os.path.join(self.sandbox_instance.getsandbox_path(), '.'+_file))
+            self.sandbox_instance.copyFileFromHost(os.path.join(self.sandbox_instance.getsandbox_path(), 'usr/bin/true'),
+                            os.path.join(self.sandbox_instance.getsandbox_path(), '.'+_file))
 
 
 class sessionManager():
 
-    def __init__(self, sandboxPath, compatV1=False, addNV=False, rootFS=None):
+    def __init__(self, sandbox_path, compat_v1=False, add_nv=False, rootfs=None):
         '''
         Standard __init__ :)
         '''
@@ -631,9 +646,9 @@ class sessionManager():
         self.pid_parent = None
         self.pid_child = None
         self.old_i_tty = None
-        self.sandboxPath = sandboxPath
-        self.compatV1 = compatV1
-        self.addNvidia = addNV
+        self.sandbox_path = sandbox_path
+        self.compat_v1 = compat_v1
+        self.add_nvidia = add_nv
 
         self.stdout_m, self.stdout_s = None, None
         self.pid_subParent = None
@@ -642,16 +657,16 @@ class sessionManager():
         self.proc2 = None
         self.pid_subChild, self.pid_subParent = None, None
 
-        self.rootFS = rootFS
+        self.rootfs = rootfs
         self._layers = ['._appBoxLayers/overlay', '._appBoxLayers/upper', '._appBoxLayers/work']
 
-    def getSandboxPath(self):
-        if self.rootFS:
-            appLogger.debug('Sandbox Path: %s', os.path.join(self.sandboxPath, '._appBoxLayers/overlay'))
-            return os.path.join(self.sandboxPath, '._appBoxLayers/overlay')
+    def getsandbox_path(self):
+        if self.rootfs:
+            appLogger.debug('Sandbox Path: %s', os.path.join(self.sandbox_path, '._appBoxLayers/overlay'))
+            return os.path.join(self.sandbox_path, '._appBoxLayers/overlay')
         else:
-            appLogger.debug('Sandbox Path: %s', self.sandboxPath)
-            return self.sandboxPath
+            appLogger.debug('Sandbox Path: %s', self.sandbox_path)
+            return self.sandbox_path
 
     def _wrangle_tty(self):
         '''
@@ -679,10 +694,10 @@ class sessionManager():
         This sets up a 'root' namespace.
         This persists for the lifetime of this shell.
         '''
-        
-        if self.rootFS:
+
+        if self.rootfs:
             for _layer in self._layers:
-                this_layer = os.path.join(self.sandboxPath, _layer)
+                this_layer = os.path.join(self.sandbox_path, _layer)
                 if not os.path.exists(this_layer):
                     os.makedirs(this_layer)
 
@@ -752,13 +767,13 @@ class sessionManager():
             appLogger.error('Too many symlinks in file: %s', hostFile)
             return
         self._copyToFromSandbox(hostFile, sandboxFile)
-        
+
     def copyFileToHost(self, sandboxFile, hostFile):
         '''
         '''
         self._copyToFromSandbox(sandboxFile, hostFile)
 
-    def createSandboxPath(self, path):
+    def createsandbox_path(self, path):
         '''
         '''
         create_cmd = 'mkdir -p {}'.format(os.path.abspath(path))
@@ -776,12 +791,12 @@ class sessionManager():
         ## TODO add better error checking here
         create_proc.wait()
         del create_proc
-        
+
     def createSandboxEmptyFile(self, path):
         '''
         '''
         create_cmd = 'touch {}'.format(os.path.abspath(path))
-        
+
         create_proc = subprocess.Popen(
                         'nsenter --preserve-credentials --user --mount --pid -t {} {}'.format(
                             self.pid_child, create_cmd),
@@ -789,7 +804,7 @@ class sessionManager():
                         stdout = subprocess.PIPE,
                         stderr = subprocess.PIPE,
                         shell=True)
-        
+
         ## TODO add better error checking here
         create_proc.wait()
         del create_proc
@@ -811,7 +826,7 @@ class sessionManager():
         This is a list of directories to be mounted into the sandbox from the host
         '''
         mounts = ['/home', '/tmp', '/dev', '/cvmfs', '/scratch', '/Data', '/localdisk', '/sys', ]
-        if self.addNvidia:
+        if self.add_nvidia:
             mounts += ['/usr/lib/wsl', '/usr/bin/nvidia-smi', '/usr/bin/nvidia-modprobe']
         return mounts
 
@@ -823,12 +838,12 @@ class sessionManager():
 
         for host_path in host_mounts:
 
-            sandbox_path = os.path.abspath(os.path.join(self.getSandboxPath(), '.'+host_path))
+            sandbox_path = os.path.abspath(os.path.join(self.getsandbox_path(), '.'+host_path))
 
             if not os.path.exists(host_path):
                 appLogger.info('Skipping path %s, as it doesn\'t exist on the host', host_path)
                 continue
-            
+
             #if not os.path.exists(sandbox_path):
             #    appLogger.info('Skipping path {}, as it doesn\'t exist on the guest'.format(sandbox_path))
             #    continue
@@ -838,7 +853,7 @@ class sessionManager():
             appLogger.debug('nsenter --preserve-credentials --user --mount --pid -t %s mount --rbind --make-rslave %s %s',
                                 self.pid_child, host_path, sandbox_path)
 
-            self.createSandboxPath(sandbox_path)
+            self.createsandbox_path(sandbox_path)
             mount_proc = subprocess.Popen(
                             'nsenter --preserve-credentials --user --mount --pid -t {} mount --rbind --make-rslave {} {}'.format(
                                 self.pid_child, host_path, sandbox_path),
@@ -851,18 +866,18 @@ class sessionManager():
 
             del mount_proc
 
-    def mountRootFS(self, rootFS):
+    def mountrootfs(self, rootfs):
         '''
         '''
 
-        rootfs_path = os.path.realpath(os.path.abspath(os.path.join(rootFS)))
+        rootfs_path = os.path.realpath(os.path.abspath(os.path.join(rootfs)))
 
         needed_layers = ['._appBoxLayers/overlay', '._appBoxLayers/upper', '._appBoxLayers/work']
 
         layer_paths = []
         for _layer in needed_layers:
 
-            layer_path = os.path.abspath(os.path.join(self.sandboxPath, _layer))
+            layer_path = os.path.abspath(os.path.join(self.sandbox_path, _layer))
 
             if not os.path.exists(layer_path):
                 os.makedirs(layer_path)
@@ -872,7 +887,7 @@ class sessionManager():
         rootfs_mount_cmd = 'fuse-overlayfs -o squash_to_root -o lowerdir={},upperdir={},workdir={} {}'.format(
                                                             rootfs_path, layer_paths[1], layer_paths[2], layer_paths[0])
 
-        appLogger.debug('Mounting rootFS via: %s', rootfs_mount_cmd)
+        appLogger.debug('Mounting rootfs via: %s', rootfs_mount_cmd)
 
         mount_proc = subprocess.Popen(
                         'nsenter --preserve-credentials --user --mount --pid -t {} {}'.format(
@@ -898,13 +913,13 @@ class sessionManager():
         del self.proc
         self.proc = None
 
-    def setupSubSpace(self, asRoot):
+    def setupSubSpace(self, as_root):
         '''
         Create a subSpace within the root space of the host
         '''
         appLogger.debug('Setting up SubSpace')
 
-        chroot_cmd = self._getSandboxCmd(None, asRoot)
+        chroot_cmd = self._getSandboxCmd(None, as_root)
 
         self.proc2 = subprocess.Popen(chroot_cmd,
                                      shell=True, preexec_fn=os.setsid,
@@ -919,19 +934,20 @@ class sessionManager():
 
         time.sleep(0.1)
 
-        with open('/proc/{}/task/{}/children'.format(self.pid_subParent, self.pid_subParent), 'r', encoding='utf-8') as _file:
+        with open('/proc/{}/task/{}/children'.format(self.pid_subParent, self.pid_subParent),
+                  'r', encoding='utf-8') as _file:
             self.pid_subChild=int(_file.read())
             appLogger.debug('Child PID: %s', self.pid_subChild)
 
         return (self.pid_subParent, self.pid_subChild)
 
-    def _getSandboxCmd(self, command=None, asRoot=False):
+    def _getSandboxCmd(self, command=None, as_root=False):
 
         if command is None:
-            if self.rootFS:
-                command_path = os.path.join(self.rootFS, 'bin/bash')
+            if self.rootfs:
+                command_path = os.path.join(self.rootfs, 'bin/bash')
             else:
-                command_path = os.path.join(self.sandboxPath, 'bin/bash')
+                command_path = os.path.join(self.sandbox_path, 'bin/bash')
             if os.path.exists(command_path):
                 command = '/bin/bash -l'
             else:
@@ -939,35 +955,40 @@ class sessionManager():
         else:
             command = 'bash -c {}'.format(command)
         #command = '/bin/bash -l'
-    
-        if not self.compatV1:
+
+        if not self.compat_v1:
             # Continue as Normal and use good hosts unshare
-            if asRoot:
-                chroot_cmd = 'bash -c \'unshare -priUmf --mount --mount-proc -R {} --propagation=unchanged {};\' exit $?'.format(self.getSandboxPath(), command)
+            if as_root:
+                chroot_cmd = 'bash -c \'unshare -priUmf --mount --mount-proc -R {} --propagation=unchanged {};\' exit $?'.format(
+                    self.getsandbox_path(), command)
             else:
-                chroot_cmd = 'bash -c \'unshare -piUmf --mount --mount-proc -R {} --propagation=unchanged {};\' exit $?'.format(self.getSandboxPath(), command)
+                chroot_cmd = 'bash -c \'unshare -piUmf --mount --mount-proc -R {} --propagation=unchanged {};\' exit $?'.format(
+                    self.getsandbox_path(), command)
         else:
             # Use the older compatibility mode for the sandbox, use chroot and drop the '-R' unshare arg...
             # TBF for HEP it was clear as day AL9 wa going to be the way forward in 202x, but some people are still on CO8/R8... _sigh_ ...
-            if asRoot:
-                chroot_cmd = 'bash -c \'unshare -priUmf --mount --mount-proc --propagation=unchanged chroot {} {};\' exit $?'.format(self.getSandboxPath(), command)
+            if as_root:
+                chroot_cmd = 'bash -c \'unshare -priUmf --mount --mount-proc --propagation=unchanged chroot {} {};\' exit $?'.format(
+                    self.getsandbox_path(), command)
             else:
-                chroot_cmd = 'bash -c \'unshare -piUmf --mount --mount-proc --propagation=unchanged chroot {} {};\' exit $?'.format(self.getSandboxPath(), command)
-    
+                chroot_cmd = 'bash -c \'unshare -piUmf --mount --mount-proc --propagation=unchanged chroot {} {};\' exit $?'.format(
+                    self.getsandbox_path(), command)
+
         return chroot_cmd
 
-    def runCommand(self, command, asRoot=False):
+    def runCommand(self, command, as_root=False):
         '''
-        '''        
+        '''
 
-        chroot_cmd = self._getSandboxCmd(command, asRoot)
+        chroot_cmd = self._getSandboxCmd(command, as_root)
 
         appLogger.debug('About to execute')
         appLogger.debug('nsenter --preserve-credentials --user --mount --pid -t %s %s ; exit $?;', self.pid_child, chroot_cmd)
 
         self._wrangle_tty()
         interactive_proc = subprocess.Popen(
-                                'nsenter --preserve-credentials --user --mount --pid -t {} {} ; exit $?;'.format(self.pid_child, chroot_cmd),
+            'nsenter --preserve-credentials --user --mount --pid -t {} {} ; exit $?;'.format(
+                self.pid_child, chroot_cmd),
                                 stdin = self.stdout_s,
                                 stdout = self.stdout_s,
                                 stderr = self.stdout_s,
@@ -986,30 +1007,35 @@ class sessionManager():
         self.running=False
 
         rc = interactive_proc.poll()
-        
+
         appLogger.debug('Return Code: %s', rc)
 
         return rc
 
-    def runInteractive(self, asRoot=True):
+    def runInteractive(self, as_root=True):
         '''
         Launch an interactive sandbox with a shell within the 'root' sandbox namespace of the host
         '''
-        #self.setupSubSpace(asRoot)
+        #self.setupSubSpace(as_root)
         #chroot_cmd = '/bin/bash -l'
 
         #shell="/bin/bash -l"
         #shell="bash -c '/bin/bash -i; echo $?'"
         #shell='bash -c "/bin/bash -l;" exit $?'
         #shell='bash -c "exit 100"; exit $?'
-        #if asRoot:
-        #    chroot_cmd = 'bash -c \'unshare -priUmf --mount-proc -R {} --propagation=unchanged {};\' exit $?'.format(self.getSandboxPath, shell)
+        #if as_root:
+        #    chroot_cmd = 'bash -c \'
+        # unshare -priUmf --mount-proc -R {} --propagation=unchanged {};\' exit $?'.
+        #                                           format(self.getsandbox_path, shell)
         #else:
-        #    chroot_cmd = 'bash -c \'unshare -piUmf --mount-proc -R {} --propagation=unchanged {};\' exit $?'.format(self.getSandboxPath, shell)
+        #    chroot_cmd = 'bash -c \'
+        # unshare -piUmf --mount-proc -R {} --propagation=unchanged {};\' exit $?'.
+        #                                           format(self.getsandbox_path, shell)
 
 
-        ## Keeping CO8 compatability because not everyone could read the writing on the wall with regard to Rocky vs Alma vs Oracle vs IBM re CERN/Fermilab...
-        chroot_cmd = self._getSandboxCmd(asRoot=asRoot)
+        ## Keeping CO8 compatability because not everyone could read the writing on the wall
+        ## with regard to Rocky vs Alma vs Oracle vs IBM re CERN/Fermilab...
+        chroot_cmd = self._getSandboxCmd(as_root=as_root)
 
         appLogger.info('About to enter namespace.')
         appLogger.info('nsenter --preserve-credentials --user --mount --pid -t %s %s ; exit $?;', self.pid_child, chroot_cmd)
@@ -1018,7 +1044,8 @@ class sessionManager():
 
         self._wrangle_tty()
         interactive_proc = subprocess.Popen(
-                                'nsenter --preserve-credentials --user --mount --pid -t {} {} ; exit $?;'.format(self.pid_child, chroot_cmd),
+            'nsenter --preserve-credentials --user --mount --pid -t {} {} ; exit $?;'.format(
+                self.pid_child, chroot_cmd),
                                 stdin = self.stdout_s,
                                 stdout = self.stdout_s,
                                 stderr = self.stdout_s,
@@ -1037,7 +1064,7 @@ class sessionManager():
         self.running=False
 
         rc = interactive_proc.poll()
-        
+
         appLogger.debug('Return Code: %s', rc)
 
         return rc
@@ -1091,7 +1118,7 @@ class sessionManager():
 
 
 class appBoxManager():
-    
+
     def setLogLevel(self, level):
 
         global appLogger
@@ -1104,7 +1131,7 @@ class appBoxManager():
 
 
 class CmdLineParser:
-    
+
     def getArgsParser(self):
         '''
         Parse the Args passed to this instance
@@ -1163,14 +1190,14 @@ RH7>
 
         parser = argparse.ArgumentParser(
                         prog='appBox', formatter_class=BlankLinesHelpFormatter,
-                        description='This is a short tool to allow you to install a custom container image as a sandbox like "virtualenv".',
+        description='This is a tool to install a custom container as a sandbox like "virtualenv".',
                         epilog=epilog)
 
         parser.add_argument('-rc', '--run-command',
                             help='Run a given command inside a sandbox.')
 
         parser.add_argument('-rp', '--run-path',
-                            help='Path to look for an installed image (extracted sandbox) to use as a run-environment.')
+        help='Path to look for an installed image (extracted sandbox) to use as a run-environment.')
 
         parser.add_argument('-rcr', '--run-command-root',
                             help='Run a given command AS ROOT inside a sandbox.')
@@ -1189,11 +1216,11 @@ RH7>
 
         parser.add_argument('-ii', '--install-image',
                             default=default_image,
-                            help='Image to install, or short-hand of image from "{} -li"'.format(sys.argv[0]))
+                help='Image to install, or short-hand of image from "{} -li"'.format(sys.argv[0]))
 
         parser.add_argument('-ip', '--install-path',
                             default=default_root,
-                            help='Install path, path to "install" an image to on disk. (The path that an image extracted to on disk)')
+        help='Install path, path to "install" an image to on disk. (Path to extract to on disk)')
 
         parser.add_argument('-ra', '--run-after', action='store_true',
                             help='Should we drop into the new sandbox after installing.')
@@ -1220,9 +1247,9 @@ RH7>
                             help='Launch Interactive environment AS ROOT, from ...')
 
         parser.add_argument('-compat', '--compat-v1', action='store_true',
-                            help='Use the older compatibility mode for the sandbox. This allows use of a CO8 host, but has issues with mounts.')
+            help='Use the older compatibility mode for the sandbox. Allows a CO8 host.')
 
-        parser.add_argument('-addNV', '--add-nvidia', action='store_true',
+        parser.add_argument('-add_nv', '--add-nvidia', action='store_true',
                             help='Add the nvidia-smi binary to the sandbox.')
 
         parser.add_argument('-cvmfs', '--use-cvmfs',
@@ -1231,17 +1258,17 @@ RH7>
         return parser
 
 
-def run_sandbox(sandboxPath, asRoot, compatV1=False):
+def run_sandbox(sandbox_path, as_root, compat_v1=False):
     '''
     Run a sandbox within a given Path as root or unknown/mapped user
     '''
 
     try:
-        thisSandbox = sessionManager(sandboxPath, compatV1)
-        thisSandbox.setupHostSpace()
+        this_sandbox = sessionManager(sandbox_path, compat_v1)
+        this_sandbox.setupHostSpace()
 
-        thisSandbox.mountHost()
-        rc = thisSandbox.runInteractive(asRoot)
+        this_sandbox.mountHost()
+        rc = this_sandbox.runInteractive(as_root)
 
         return rc
 
@@ -1249,30 +1276,28 @@ def run_sandbox(sandboxPath, asRoot, compatV1=False):
         appLogger.error('Exception during running appBox Shell: %s', err)
         raise
     finally:
-        thisSandbox.cleanupSpaces()
+        this_sandbox.cleanupSpaces()
 
 
-def run_command(sandboxPath, command, asRoot, compatV1=False, addNV=False, rootFS=None):
+def run_command(sandbox_path, command, as_root, compat_v1=False, add_nv=False, rootfs=None):
     '''
     Run a command within a sandbox
     '''
 
     try:
-        thisSandbox = sessionManager(sandboxPath, compatV1, addNV, rootFS)
-        thisSandbox.setupHostSpace()
+        this_sandbox = sessionManager(sandbox_path, compat_v1, add_nv, rootfs)
+        this_sandbox.setupHostSpace()
 
-        if rootFS:
-            thisSandbox.mountRootFS(rootFS)
+        if rootfs:
+            this_sandbox.mountrootfs(rootfs)
             #time.sleep(1.0)
-        else:
-            wanted_dest = sandboxPath
 
-        thisSandbox.mountHost()
+        this_sandbox.mountHost()
 
-        theseFixes = sandboxFixes(addNV, thisSandbox)
-        theseFixes.applyAllFixes()
+        these_fixes = sandboxFixes(add_nv, this_sandbox)
+        these_fixes.applyAllFixes()
 
-        rc = thisSandbox.runCommand(command, asRoot)
+        rc = this_sandbox.runCommand(command, as_root)
 
         return rc
 
@@ -1280,14 +1305,14 @@ def run_command(sandboxPath, command, asRoot, compatV1=False, addNV=False, rootF
         appLogger.error('Exception during running appBox Shell: %s', err)
         raise
     finally:
-        thisSandbox.cleanupSpaces()
+        this_sandbox.cleanupSpaces()
 
 
 def main():
     '''
     Main :) Hello
     '''
-    
+
     ### Parse our args and steer
     parser = CmdLineParser().getArgsParser()
     parsed_args = parser.parse_args(sys.argv[1:])
@@ -1305,29 +1330,29 @@ def main():
 
 
     command_to_run = None
-    asRoot = False
-    compatV1 = False
+    as_root = False
+    compat_v1 = False
     wanted_dest = None
     should_run = False
-    needToInstall = False
-    addNV = parsed_args.add_nvidia
+    need_to_install = False
+    add_nv = parsed_args.add_nvidia
 
     lower_layer = None
 
     if parsed_args.compat_v1:
-        compatV1 = True
+        compat_v1 = True
 
     wanted_image = parsed_args.install_image
     if parsed_args.install_path:
         wanted_dest = parsed_args.install_path
-        needToInstall = True
+        need_to_install = True
 
     if parsed_args.run_command:
         command_to_run = parsed_args.run_command
         should_run = True
     if parsed_args.run_command_root:
         command_to_run = parsed_args.run_command_root
-        asRoot = True
+        as_root = True
         should_run = True
 
     if parsed_args.launch:
@@ -1335,13 +1360,13 @@ def main():
         should_run = True
     if parsed_args.launch_root:
         wanted_dest = parsed_args.launch_root
-        asRoot = True
+        as_root = True
         should_run = True
-        
+
     if parsed_args.run_after:
         should_run = True
     if parsed_args.run_after_root:
-        asRoot = True
+        as_root = True
         should_run = True
 
     if parsed_args.use_cvmfs:
@@ -1355,13 +1380,13 @@ def main():
     #    should_run = True
     #if parsed_args.run_interactive_root:
     #    wanted_dest = parsed_args.run_interactive_root
-    #    asRoot = True
+    #    as_root = True
     #    should_run = True
-    
+
     wanted_dest = os.path.abspath(wanted_dest)
-    
+
     appLogger.debug('Looking in path: "%s"', wanted_dest)
-        
+
     if parsed_args.run_path:
         wanted_dest = parsed_args.run_path
         should_run = True
@@ -1370,14 +1395,14 @@ def main():
         appLogger.info('Sandbox: "%s" does not exist.', wanted_dest)
         if not lower_layer:
             appLogger.info('Installing: "%s" at "%s"', wanted_image, wanted_dest)
-            needToInstall = True
+            need_to_install = True
         else:
             appLogger.info('Using CVMFS: "%s"', lower_layer)
-            needToInstall = False
+            need_to_install = False
 
 
     rc = False
-    if needToInstall and not lower_layer:
+    if need_to_install and not lower_layer:
 
         ## TODO
         ## Add some way of handling images from other sources
@@ -1405,18 +1430,16 @@ def main():
 
 
     if should_run:
-    
+
         if command_to_run:
             command_to_run = '" ' + command_to_run + ' "'
-    
+
         # We now plan to run a command or launch a shell
-        rc = run_command(wanted_dest, command_to_run, asRoot, compatV1, addNV, lower_layer)
+        rc = run_command(wanted_dest, command_to_run, as_root, compat_v1, add_nv, lower_layer)
         sys.exit(rc)
-        
+
     sys.exit(0)
 
 
 if __name__ == '__main__':
     main()
-
-
