@@ -191,7 +191,10 @@ class DockerHub(ImageSource):
                 ## This should probably be done by a filter as we 'care' about some errors we're silencing here
                 ## See Ubuntu:16.04 if you can still find it...
                 with tarfile.open(layer['cacheFile'], errorlevel=0) as _tfile:
-                    _tfile.extractall(tmpFolder)
+                    try:
+                        _tfile.extractall(tmpFolder, filter='tar')
+                    except TypeError:
+                        _tfile.extractall(tmpFolder)
 
         for (root, dirs, files) in os.walk(tmpFolder, topdown=True):
             for _dir in dirs:
@@ -334,7 +337,10 @@ class DockerHub(ImageSource):
 
         appLogger.info('Extracting Compressed Image.')
         with tarfile.open(this_image) as _tfile:
-            _tfile.extractall(dest)
+            try:
+               _tfile.extractall(dest, filter='fully_trusted')
+            except TypeError:
+               _tfile.extractall(dest)
 
         appLogger.info('Writing metaData.')
         with open(appBox_file, 'w+', encoding='utf-8') as _file:
@@ -732,6 +738,9 @@ class sessionManager():
 
             appLogger.debug('---')
 
+        if not self.pid_child:
+            raise Exception('Cannot Fork Child Process. Are you trying to run appBox inside appBox?')
+
         return self.pid_parent, self.pid_child
 
     def _copyToFromSandbox(self, source, dest):
@@ -849,11 +858,11 @@ class sessionManager():
             #    continue
 
             appLogger.debug('Bind Mounting: %s as: %s', host_path, sandbox_path)
+            self.createsandbox_path(sandbox_path)
 
             appLogger.debug('nsenter --preserve-credentials --user --mount --pid -t %s mount --rbind --make-rslave %s %s',
                                 self.pid_child, host_path, sandbox_path)
 
-            self.createsandbox_path(sandbox_path)
             mount_proc = subprocess.Popen(
                             'nsenter --preserve-credentials --user --mount --pid -t {} mount --rbind --make-rslave {} {}'.format(
                                 self.pid_child, host_path, sandbox_path),
@@ -906,12 +915,15 @@ class sessionManager():
         Cleanup the 'persistent' spaces which have been created
         '''
         # restore tty settings back
-        os.write(sys.stdin.fileno(), '\n\r'.encode())
-        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.old_i_tty)
-        sys.stdin.flush()
-        sys.stdout.flush()
-        del self.proc
-        self.proc = None
+        try:
+            os.write(sys.stdin.fileno(), '\n\r'.encode())
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.old_i_tty)
+            sys.stdin.flush()
+            sys.stdout.flush()
+            del self.proc
+            self.proc = None
+        except:
+            pass
 
     def setupSubSpace(self, as_root):
         '''
@@ -1202,7 +1214,7 @@ RH7>
         parser.add_argument('-rcr', '--run-command-root',
                             help='Run a given command AS ROOT inside a sandbox.')
 
-        default_root = '/scratch/appBox_rcurrie/sandbox'
+        default_root = '/scratch/appBox_{}/CO7_sandbox'.format(getUN())
 
         #parser.add_argument('-ri', '--run-interactive',
         #                    type=str, default=default_root,
@@ -1212,7 +1224,8 @@ RH7>
         #                    type=str, default=default_root,
         #                    help='Launch a sandbox shell AS ROOT from this location.')
 
-        default_image = 'almalinux:9'
+        #default_image = 'almalinux:9'
+        default_image = 'centos:7'
 
         parser.add_argument('-ii', '--install-image',
                             default=default_image,
@@ -1274,7 +1287,8 @@ def run_sandbox(sandbox_path, as_root, compat_v1=False):
 
     except Exception as err:
         appLogger.error('Exception during running appBox Shell: %s', err)
-        raise
+        if appLogger.level == logging.DEBUG:
+            raise
     finally:
         this_sandbox.cleanupSpaces()
 
@@ -1303,7 +1317,8 @@ def run_command(sandbox_path, command, as_root, compat_v1=False, add_nv=False, r
 
     except Exception as err:
         appLogger.error('Exception during running appBox Shell: %s', err)
-        raise
+        if appLogger.level == logging.DEBUG:
+            raise
     finally:
         this_sandbox.cleanupSpaces()
 
