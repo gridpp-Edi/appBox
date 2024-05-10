@@ -1,4 +1,40 @@
-# FAQ:
+
+
+# Usage:
+
+## Simplest
+
+On a RHEL9/Alma9/EL9 host this will drop you into a CentOS7 sandbox for development
+
+> ./appBox -ra
+
+If you want root access to the same sandbox you can use:
+
+> ./appBox -rar
+
+### What did this do?
+
+Thie downloaded the docker image _"centos:7"_ from dockerhub. Extracted it as a sandbox. Made some changes to make sure it works well. And then openned an interactive terminal within this sandbox environment.
+
+### What else can it do?
+
+You can configure what image it downloads from dockerhub. You can configure 'where it installs the image to' and you can configure a few other useful things.
+
+
+## More advanced Usage
+
+> ./appBox -ii tensorflow/tensorflow:latest-gpu-jupyter -ip $HOME/tf-w-gpu-support -rar -add_nv
+
+This will grab the latest tensorflow image from dockerhub which has been installed with working GPU support and jupyter notebooks.
+It will install it into your home area within a folder you choose.
+It will mount some nvidia components from the host into the sandbox.
+Finally it will drop into a pseudo-root terminal within this sandbox.
+All without needing local root/admin access.
+
+
+
+
+# FAQs:
 
 ## Why does this exist?
 
