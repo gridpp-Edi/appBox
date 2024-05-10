@@ -417,7 +417,7 @@ class sandboxFixes():
         # which means...
         # well...
         # yeah...
-        base_path_list = ['/dev', '/etc', '/cvmfs', '/scratch', '/Data', '/localdisk', '/sys', '/tmp', '/home', '/proc']
+        base_path_list = ['/afs', '/dev', '/etc', '/cvmfs', '/scratch', '/Data', '/localdisk', '/sys', '/tmp', '/home', '/proc', '/tmp/{}'.format(getUN())]
 
         if self.add_nvidia:
             base_path_list.append('/usr/lib/wsl')
@@ -478,6 +478,11 @@ class sandboxFixes():
             self._fixGroup(tmp_group_file)
         finally:
             os.unlink(tmp_group_file)
+        tmp_shadow_file = os.path.join(self.tmpPath, 'gshadow_{}'.format(str(uuid.uuid4())[:8]))
+        try:
+            self._fixGShadow(tmp_shadow_file)
+        finally:
+            os.unlink(tmp_shadow_file)
 
     def _fixPasswd(self, tmp_passwd_file):
         '''
@@ -496,7 +501,9 @@ class sandboxFixes():
         for _line in _content.split('\n'):
             if _line:
                 _user, _, _uid, _gid, _name, _home, _shell = _line.split(':')
-                if _user in ['root', getUN()]:
+                if _user in ['root', getUN(), 'fax', 'input', 'kvm', 'render']:
+                    continue
+                if _user.startswith('systemd'): # A dirty trick to keep apt 'content' on Ubuntu systems
                     continue
                 appLogger.debug('User: "%s", UID: "%s", GID: "%s", Name: "%s", Home: "%s", Shell: "%s"',
                                     _user, _uid, _gid, _name, _home, _shell)
@@ -525,7 +532,9 @@ class sandboxFixes():
         for _line in _content.split('\n'):
             if _line:
                 _group, _, _gid, _users = _line.split(':')
-                if _group in ['root', getUN()]:
+                if _group in ['root', getUN(), 'fax', 'input', 'kvm', 'render']:
+                    continue
+                if _group.startswith('systemd'): # A dirty trick to keep apt 'content' on Ubuntu systems
                     continue
                 appLogger.debug('Group: "%s", GID: "%s", Users: "%s"', _group, _gid, _users)
 
@@ -535,6 +544,32 @@ class sandboxFixes():
             _file.write(new_content)
 
         self.sandbox_instance.copyFileFromHost(tmp_group_file, os.path.join(self.sandbox_instance.getsandbox_path(), './etc/group'))
+
+    def _fixGShadow(self, tmp_shadow_file):
+        '''
+        '''
+        self.sandbox_instance.copyFileToHost('/etc/gshadow', tmp_shadow_file)
+        with open(tmp_shadow_file, 'r', encoding='utf-8') as _file:
+            _content = _file.read()
+            appLogger.debug('Content: "%s"', _content)
+
+        new_content = ''
+
+        for _line in _content.split('\n'):
+            if _line:
+                _pass = True
+                for check in ['fax', 'voice', 'sudo', 'dip', 'operator', 'src', 'shadow', 'sasl', 'plugdev', 'staff', 'nogroup']:
+                    if _line.startswith(check):
+                        _pass = False
+                        break
+                if not _pass:
+                    continue
+                new_content += _line + '\n'
+
+        with open(tmp_shadow_file, 'w+', encoding='utf-8') as _file:
+            _file.write(new_content)
+
+        self.sandbox_instance.copyFileFromHost(tmp_shadow_file, os.path.join(self.sandbox_instance.getsandbox_path(), './etc/gshadow'))
 
     def fixAliases(self):
 
@@ -581,12 +616,12 @@ class sandboxFixes():
             self.sandbox_instance.copyFileFromHost(tmp_sandbox, os.path.join(app_conf_path, '99appBox'))
 
             ## Hack of a hack...
-            ## cp /usr/bin/true /usr/bin/dpkg-statoverride
+            ## cp /bin/true /usr/bin/dpkg-statoverride
 
-            shutil.copyfile(os.path.join(self.sandbox_instance.getsandbox_path(), 'usr/bin/true'),
+            shutil.copyfile(os.path.join(self.sandbox_instance.getsandbox_path(), 'bin/true'),
                             os.path.join(self.sandbox_instance.getsandbox_path(), 'usr/bin/dpkg-statoverride'))
 
-            shutil.copyfile(os.path.join(self.sandbox_instance.getsandbox_path(), 'usr/bin/true'),
+            shutil.copyfile(os.path.join(self.sandbox_instance.getsandbox_path(), 'bin/true'),
                             os.path.join(self.sandbox_instance.getsandbox_path(), 'bin/dpkg-statoverride'))
 
     def installAppBox(self):
@@ -636,10 +671,10 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
         ## Intention here is to 'stop' automated tooling from trying to do something bad within the sandbox
         ## This has the side-effect of stopping people changing a file so that they can't so anything with it
 
-        for _file in ['/usr/bin/chown', '/usr/bin/chmod', '/bin/chown', '/bin/chmod']:
-            self.sandbox_instance.copyFileFromHost(os.path.join(self.sandbox_instance.getsandbox_path(), 'usr/bin/true'),
+        for _file in ['/usr/bin/chown', '/usr/bin/chmod', '/bin/chown', '/bin/chmod', ]:
+            self.sandbox_instance.copyFileFromHost(os.path.join(self.sandbox_instance.getsandbox_path(), 'bin/true'),
                             os.path.join(self.sandbox_instance.getsandbox_path(), '.'+_file))
-            self.sandbox_instance.copyFileFromHost(os.path.join(self.sandbox_instance.getsandbox_path(), 'usr/bin/true'),
+            self.sandbox_instance.copyFileFromHost(os.path.join(self.sandbox_instance.getsandbox_path(), 'bin/true'),
                             os.path.join(self.sandbox_instance.getsandbox_path(), '.'+_file))
 
 
@@ -761,6 +796,7 @@ class sessionManager():
 
         ## TODO add better error checking here
         copy_proc.wait()
+        appLogger.debug(copy_proc.poll())
         del copy_proc
 
     def copyFileFromHost(self, hostFile, sandboxFile):
@@ -776,11 +812,15 @@ class sessionManager():
         if i>10:
             appLogger.error('Too many symlinks in file: %s', hostFile)
             return
+        #if self.compat_v1:
+        #    sandboxFile = os.path.join(self.getsandbox_path(), '.'+sandboxFile)
         self._copyToFromSandbox(hostFile, sandboxFile)
 
     def copyFileToHost(self, sandboxFile, hostFile):
         '''
         '''
+        #if self.compat_v1:
+        sandboxFile = os.path.join(self.getsandbox_path(), '.'+sandboxFile)
         self._copyToFromSandbox(sandboxFile, hostFile)
 
     def createsandbox_path(self, path, overridePID=None):
@@ -838,7 +878,7 @@ class sessionManager():
         '''
         This is a list of directories to be mounted into the sandbox from the host
         '''
-        mounts = ['/home', '/tmp', '/dev', '/cvmfs', '/scratch', '/Data', '/localdisk', '/sys', ]
+        mounts = ['/afs', '/home', '/tmp', '/dev', '/cvmfs', '/scratch', '/Data', '/localdisk', '/sys', ]
         if self.add_nvidia:
             mounts += ['/usr/lib/wsl', '/usr/bin/nvidia-smi', '/usr/bin/nvidia-modprobe']
         return mounts
@@ -971,29 +1011,36 @@ class sessionManager():
             else:
                 command = '/bin/sh'
         else:
-            command = 'bash -c {}'.format(command)
+            if not self.compat_v1:
+                command_path = os.path.join(self.sandbox_path, 'bin/bash')
+                if os.path.exists(command_path):
+                    command = '/bin/bash -c "sleep 1; {}"'.format(command)
+                else:
+                    pass
+            else:
+                command = '/bin/bash -c \'sleep 1; {}\''.format(command)
         #command = '/bin/bash -l'
 
         if not self.compat_v1:
             # Continue as Normal and use good hosts unshare
             if as_root:
-                chroot_cmd = 'bash -c \'unshare -priUmf --mount --mount-proc -R {} --propagation=unchanged {};\' exit $?'.format(
-                    self.getsandbox_path(), command)
+                chroot_cmd = '/bin/bash -c \'mount -t tmpfs tmpfs {}/run; unshare -priUmf --mount --mount-proc -R {} --propagation=unchanged {};\' exit $?'.format(
+                    self.getsandbox_path(), self.getsandbox_path(), command)
             else:
-                chroot_cmd = 'bash -c \'unshare -piUmf --mount --mount-proc -R {} --propagation=unchanged {};\' exit $?'.format(
-                    self.getsandbox_path(), command)
+                chroot_cmd = '/bin/bash -c \'mount -t tmpfs tmpfs {}/run; unshare -piUmf --mount --mount-proc -R {} --propagation=unchanged {};\' exit $?'.format(
+                    self.getsandbox_path(), self.getsandbox_path(), command)
         else:
             # Use the older compatibility mode for the sandbox, use chroot and drop the '-R' unshare arg...
             # TBF for HEP it was clear as day AL9 wa going to be the way forward in 202x, but some people are still on CO8/R8... _sigh_ ...
-            #if as_root:
-            #    chroot_cmd = 'bash -c \'chroot {} bash -c "mount -t proc proc /proc; {}";\' exit $?'.format(
-            #        self.getsandbox_path(), command)
-            #else:
+
+            # I absolutely could not find a way without unshare -R to drop down to a non-priviledged anon user using chroot
+            # This could simply be me mis-understanding something about sandboxes and their inheritance, or my mistake
+            # Given I don't really _want_ to support running on such an old host I think we can just say for now:
 
             if not as_root:
                 appLogger.warning('Compatability with older Hosts doesn\'t work with dropping into a \'non-root\' sandbox.')
 
-            chroot_cmd = 'bash -c \'chroot {} bash -c "mount -t proc proc /proc; {}";\' exit $?'.format(
+            chroot_cmd = 'chroot {} /bin/bash -c "export PATH=/bin:/sbin:/usr/sbin:/usr/bin:$PATH; /bin/mount -t tmpfs tmpfs /run; /bin/mount -t proc proc /proc; {}"; exit $?'.format(
                 self.getsandbox_path(), command)
 
         return chroot_cmd
@@ -1011,19 +1058,29 @@ class sessionManager():
         interactive_proc = subprocess.Popen(
             'nsenter --preserve-credentials --user --mount --pid -t {} {} ; exit $?;'.format(
                 self.pid_child, chroot_cmd),
-                                stdin = self.stdout_s,
+                 stdin = self.stdout_s,
                                 stdout = self.stdout_s,
                                 stderr = self.stdout_s,
                                 shell = True, universal_newlines = True, preexec_fn=os.setsid
                                 )
 
-        # TODO add better check for forking process having started properly!!!
-        time.sleep(0.25)
+        i=0
+        TIME_LIMIT=100
 
-        if self.compat_v1:
+        while i<= TIME_LIMIT:
+            time.sleep(0.1)  # Total 10s chance for child to spawn on a healthy system
+            i=i+1            # Obviously 10s+work-time, but I'm assuming accessing proc is cheap
 
             parentID = interactive_proc.pid
             childID = parentID
+
+            try:
+                # If the process is unknown or in a zombie state
+                if self.procState(interactive_proc.pid) in ['Z', 'E']:
+                    break
+            except PermissionError as err:
+                break
+
             while True:
 
                 appLogger.debug('Parent PID: %s', parentID)
@@ -1038,65 +1095,13 @@ class sessionManager():
 
                 appLogger.debug('---')
 
-            self.mountHost(childID)
-
-
-        readable = [sys.stdin, self.stdout_m]
-        while True:
-
-            self.running = True
-            should_continue = self._shell_fwd_bck(interactive_proc, readable)
-
-            if not should_continue:
+            if parentID != childID and childID:
+                if self.compat_v1:
+                    self.mountHost(childID)
                 break
-        self.running=False
 
-        rc = interactive_proc.poll()
-
-        appLogger.debug('Return Code: %s', rc)
-
-        return rc
-
-    def runInteractive(self, as_root=True):
-        '''
-        Launch an interactive sandbox with a shell within the 'root' sandbox namespace of the host
-        '''
-        #self.setupSubSpace(as_root)
-        #chroot_cmd = '/bin/bash -l'
-
-        #shell="/bin/bash -l"
-        #shell="bash -c '/bin/bash -i; echo $?'"
-        #shell='bash -c "/bin/bash -l;" exit $?'
-        #shell='bash -c "exit 100"; exit $?'
-        #if as_root:
-        #    chroot_cmd = 'bash -c \'
-        # unshare -priUmf --mount-proc -R {} --propagation=unchanged {};\' exit $?'.
-        #                                           format(self.getsandbox_path, shell)
-        #else:
-        #    chroot_cmd = 'bash -c \'
-        # unshare -piUmf --mount-proc -R {} --propagation=unchanged {};\' exit $?'.
-        #                                           format(self.getsandbox_path, shell)
-
-
-        ## Keeping CO8 compatability because not everyone could read the writing on the wall
-        ## with regard to Rocky vs Alma vs Oracle vs IBM re CERN/Fermilab...
-        chroot_cmd = self._getSandboxCmd(as_root=as_root)
-
-        appLogger.info('About to enter namespace.')
-        appLogger.info('nsenter --preserve-credentials --user --mount --pid -t %s %s ; exit $?;', self.pid_child, chroot_cmd)
-
-        #time.sleep(300)
-
-        self._wrangle_tty()
-        interactive_proc = subprocess.Popen(
-            'nsenter --preserve-credentials --user --mount --pid -t {} {} ; exit $?;'.format(
-                self.pid_child, chroot_cmd),
-                                stdin = self.stdout_s,
-                                stdout = self.stdout_s,
-                                stderr = self.stdout_s,
-                                shell = True, universal_newlines = True, preexec_fn=os.setsid
-                                )
-
+        if i>TIME_LIMIT:
+            raise Exception('Failed to spawn child process to launch shell or run command.')
 
         readable = [sys.stdin, self.stdout_m]
         while True:
@@ -1250,7 +1255,12 @@ RH7>
         parser.add_argument('-rcr', '--run-command-root',
                             help='Run a given command AS ROOT inside a sandbox.')
 
-        default_root = '/scratch/appBox_{}/CO7_sandbox'.format(getUN())
+        if os.path.exists('/scratch'):
+            leading_path = '/scratch'
+        else:
+            leading_path = '/tmp'
+
+        default_root = '{}/appBox_{}/sandbox'.format(leading_path, getUN())
 
         #parser.add_argument('-ri', '--run-interactive',
         #                    type=str, default=default_root,
@@ -1307,28 +1317,6 @@ RH7>
         return parser
 
 
-def run_sandbox(sandbox_path, as_root, compat_v1=False):
-    '''
-    Run a sandbox within a given Path as root or unknown/mapped user
-    '''
-
-    try:
-        this_sandbox = sessionManager(sandbox_path, compat_v1)
-        this_sandbox.setupHostSpace()
-
-        this_sandbox.mountHost()
-        rc = this_sandbox.runInteractive(as_root)
-
-        return rc
-
-    except Exception as err:
-        appLogger.error('Exception during running appBox Shell: %s', err)
-        if appLogger.level == logging.DEBUG:
-            raise
-    finally:
-        this_sandbox.cleanupSpaces()
-
-
 def run_command(sandbox_path, command, as_root, compat_v1=False, add_nv=False, rootfs=None):
     '''
     Run a command within a sandbox
@@ -1355,6 +1343,7 @@ def run_command(sandbox_path, command, as_root, compat_v1=False, add_nv=False, r
         appLogger.error('Exception during running appBox Shell: %s', err)
         if appLogger.level == logging.DEBUG:
             raise
+        sys.exit(56)
     finally:
         this_sandbox.cleanupSpaces()
 
@@ -1492,13 +1481,16 @@ def main():
         image_manager.pullContainer(image_name, image_tag)
 
         # Extract the image to the destination path
-        rc = image_manager.buildSandbox(image_name, image_tag, wanted_dest)
+        try:
+            rc = image_manager.buildSandbox(image_name, image_tag, wanted_dest)
+        except PermissionError as err:
+            if appLogger.level == logging.DEBUG:
+                raise err
+            appLogger.error('Permission Denied. Normally this means we don\'t have write access to: "%s"', wanted_dest)
+            sys.exit(19)
 
 
     if should_run:
-
-        if command_to_run:
-            command_to_run = '" ' + command_to_run + ' "'
 
         # We now plan to run a command or launch a shell
         rc = run_command(wanted_dest, command_to_run, as_root, compat_v1, add_nv, lower_layer)
