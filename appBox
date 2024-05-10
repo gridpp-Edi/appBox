@@ -5,6 +5,7 @@ import fcntl
 import json
 import logging
 import os
+import platform
 import pty
 import pwd
 import select
@@ -782,16 +783,19 @@ class sessionManager():
         '''
         self._copyToFromSandbox(sandboxFile, hostFile)
 
-    def createsandbox_path(self, path):
+    def createsandbox_path(self, path, overridePID=None):
         '''
         '''
+        pid_space = self.pid_child
+        if overridePID:
+            pid_space = overridePID
         create_cmd = 'mkdir -p {}'.format(os.path.abspath(path))
         appLogger.debug('nsenter --preserve-credentials --user --mount --pid -t %s %s',
-                            self.pid_child, create_cmd)
+                            pid_space, create_cmd)
 
         create_proc = subprocess.Popen(
                         'nsenter --preserve-credentials --user --mount --pid -t {} {}'.format(
-                            self.pid_child, create_cmd),
+                            pid_space, create_cmd),
                         stdin = subprocess.PIPE,
                         stdout = subprocess.PIPE,
                         stderr = subprocess.PIPE,
@@ -839,7 +843,7 @@ class sessionManager():
             mounts += ['/usr/lib/wsl', '/usr/bin/nvidia-smi', '/usr/bin/nvidia-modprobe']
         return mounts
 
-    def mountHost(self):
+    def mountHost(self, overridePID=None):
         '''
         Mount the shared paths between the host and the sandbox namespace
         '''
@@ -850,22 +854,24 @@ class sessionManager():
             sandbox_path = os.path.abspath(os.path.join(self.getsandbox_path(), '.'+host_path))
 
             if not os.path.exists(host_path):
-                appLogger.info('Skipping path %s, as it doesn\'t exist on the host', host_path)
+                appLogger.debug('Skipping path %s, as it doesn\'t exist on the host', host_path)
                 continue
 
-            #if not os.path.exists(sandbox_path):
-            #    appLogger.info('Skipping path {}, as it doesn\'t exist on the guest'.format(sandbox_path))
-            #    continue
-
             appLogger.debug('Bind Mounting: %s as: %s', host_path, sandbox_path)
-            self.createsandbox_path(sandbox_path)
+            self.createsandbox_path(sandbox_path, overridePID)
 
-            appLogger.debug('nsenter --preserve-credentials --user --mount --pid -t %s mount --rbind --make-rslave %s %s',
-                                self.pid_child, host_path, sandbox_path)
+            pid_space = self.pid_child
+            mount_opts = '--rbind --make-rslave'
+            if overridePID:
+                pid_space = overridePID
+                mount_opts = '--rbind'
+
+            appLogger.debug('nsenter --preserve-credentials --user --mount --pid -t %s mount %s %s %s',
+                                pid_space, mount_opts, host_path, sandbox_path)
 
             mount_proc = subprocess.Popen(
-                            'nsenter --preserve-credentials --user --mount --pid -t {} mount --rbind --make-rslave {} {}'.format(
-                                self.pid_child, host_path, sandbox_path),
+                            'nsenter --preserve-credentials --user --mount --pid -t {} mount {} {} {}'.format(
+                                pid_space, mount_opts, host_path, sandbox_path),
                             stdin = subprocess.PIPE,
                             stdout = subprocess.PIPE,
                             stderr = subprocess.PIPE,
@@ -979,12 +985,16 @@ class sessionManager():
         else:
             # Use the older compatibility mode for the sandbox, use chroot and drop the '-R' unshare arg...
             # TBF for HEP it was clear as day AL9 wa going to be the way forward in 202x, but some people are still on CO8/R8... _sigh_ ...
-            if as_root:
-                chroot_cmd = 'bash -c \'unshare -priUmf --mount --mount-proc --propagation=unchanged chroot {} {};\' exit $?'.format(
-                    self.getsandbox_path(), command)
-            else:
-                chroot_cmd = 'bash -c \'unshare -piUmf --mount --mount-proc --propagation=unchanged chroot {} {};\' exit $?'.format(
-                    self.getsandbox_path(), command)
+            #if as_root:
+            #    chroot_cmd = 'bash -c \'chroot {} bash -c "mount -t proc proc /proc; {}";\' exit $?'.format(
+            #        self.getsandbox_path(), command)
+            #else:
+
+            if not as_root:
+                appLogger.warning('Compatability with older Hosts doesn\'t work with dropping into a \'non-root\' sandbox.')
+
+            chroot_cmd = 'bash -c \'chroot {} bash -c "mount -t proc proc /proc; {}";\' exit $?'.format(
+                self.getsandbox_path(), command)
 
         return chroot_cmd
 
@@ -1006,6 +1016,29 @@ class sessionManager():
                                 stderr = self.stdout_s,
                                 shell = True, universal_newlines = True, preexec_fn=os.setsid
                                 )
+
+        # TODO add better check for forking process having started properly!!!
+        time.sleep(0.25)
+
+        if self.compat_v1:
+
+            parentID = interactive_proc.pid
+            childID = parentID
+            while True:
+
+                appLogger.debug('Parent PID: %s', parentID)
+                appLogger.debug('Child PID: %s', childID)
+                try:
+                    parentID, childID = self.getChildID(childID)
+                    #self.pid_child = childID
+                except (OSError, ValueError) as err:
+                    appLogger.debug('Error: %s', err)
+                    break
+                time.sleep(0.1)
+
+                appLogger.debug('---')
+
+            self.mountHost(childID)
 
 
         readable = [sys.stdin, self.stdout_m]
@@ -1099,8 +1132,11 @@ class sessionManager():
         This is the component for handling sending data in/out of the pty
         '''
 
-        # If the process is unknown or in a zombie state
-        if self.procState(interactive_proc.pid) in ['Z', 'E']:
+        try:
+            # If the process is unknown or in a zombie state
+            if self.procState(interactive_proc.pid) in ['Z', 'E']:
+                return False
+        except PermissionError as err:
             return False
 
 	    # Poll for input/output
@@ -1397,6 +1433,21 @@ def main():
     #    wanted_dest = parsed_args.run_interactive_root
     #    as_root = True
     #    should_run = True
+
+    def platform_detection():
+        plat_str = platform.platform()
+        detected = False
+        for _str in ['centos-7', '3.10.', '4.18.0', ]:
+            if _str in plat_str:
+                detected = True
+                break
+        return detected
+
+    if platform_detection() and not compat_v1: 
+        appLogger.warning('Detected older platform than EL9/UB22 defaulting back to compatability mode.')
+        appLogger.warning('You won\'t be able to use anonymous user-mapping for this session.')
+        appLogger.warning('To disable this warning, use the -compat cmd arg.')
+        compat_v1 = True
 
     wanted_dest = os.path.abspath(wanted_dest)
 
