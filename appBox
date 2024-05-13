@@ -1,6 +1,12 @@
 #!/bin/env python3
-
-# AppBox
+#
+#   ▄▀▀█▄   ▄▀▀▄▀▀▀▄  ▄▀▀▄▀▀▀▄  ▄▀▀█▄▄   ▄▀▀▀▀▄   ▄▀▀▄  ▄▀▄ 
+#  ▐ ▄▀ ▀▄ █   █   █ █   █   █ ▐ ▄▀   █ █      █ █    █   █ 
+#    █▄▄▄█ ▐  █▀▀▀▀  ▐  █▀▀▀▀    █▄▄▄▀  █      █ ▐     ▀▄▀  
+#   ▄▀   █    █         █        █   █  ▀▄    ▄▀      ▄▀ █  
+#  █   ▄▀   ▄▀        ▄▀        ▄▀▄▄▄▀    ▀▀▀▀       █  ▄▀  
+#  ▐   ▐   █         █         █    ▐              ▄▀  ▄▀   
+#          ▐         ▐         ▐                  █    ▐    
 # - Written by Rob Currie <rob.currie(at)ed.ac.uk>
 #
 # This tool is designed to simplify the life of users looking to use container-like sandbox environments to do work, testing, hacking
@@ -1322,8 +1328,9 @@ RH7>
         parser.add_argument('-add_nv', '--add-nvidia', action='store_true',
                             help='Add the nvidia-smi binary to the sandbox.')
 
-        parser.add_argument('-cvmfs', '--use-cvmfs',
-                            help='Use uncompressed image from this CVMFS path.')
+        # Disabling the cvmfs tooling for now as it's not production ready/tested yet.
+        #parser.add_argument('-cvmfs', '--use-cvmfs',
+        #                    help='Use uncompressed image from this CVMFS path.')
 
         return parser
 
@@ -1420,11 +1427,11 @@ def main():
         as_root = True
         should_run = True
 
-    if parsed_args.use_cvmfs:
-        lower_layer = parsed_args.use_cvmfs
-        should_run = True
-        #cvmfs_sandbox(parsed_args.use_cvmfs, wanted_dest, None, True)
-        #sys.exit(-200)
+    #if parsed_args.use_cvmfs:
+    #    lower_layer = parsed_args.use_cvmfs
+    #    should_run = True
+    #    #cvmfs_sandbox(parsed_args.use_cvmfs, wanted_dest, None, True)
+    #    #sys.exit(-200)
 
     #if parsed_args.run_interactive:
     #    wanted_dest = parsed_args.run_interactive

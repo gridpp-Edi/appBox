@@ -7,6 +7,8 @@
        ╚═╝  ╚═╝╚═╝     ╚═╝     ╚═════╝  ╚═════╝ ╚═╝  ╚═╝
 </pre>
 
+
+
 # About
 
 AppBox was written to address the following problems:
@@ -72,3 +74,4 @@ AppBox aims to make my life and the life of others easier.
 Could I just use Apptainer and ignore this? - Yes, but this tool is about making your life easier. How much time is wasted chaining sandbox options and fake root permissions together?
 
 
+For more info see FAQ.md
