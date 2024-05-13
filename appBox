@@ -1,5 +1,16 @@
 #!/bin/env python3
 
+# AppBox
+# - Written by Rob Currie <rob.currie(at)ed.ac.uk>
+#
+# This tool is designed to simplify the life of users looking to use container-like sandbox environments to do work, testing, hacking
+# This was written to address several issues which all have the same solution, but the existing implementations are, well... ugly.
+#
+# This is a tool for initializing sandboxes, fixing common gotchas and generaly allowing users to do more with what they have.
+#
+# This is distributed under the GPLv2 only, but I ask that people not remove attribution when using/modifying this.
+
+
 import argparse
 import fcntl
 import json
