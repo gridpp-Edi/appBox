@@ -18,7 +18,7 @@ This tool does not require additional packages to be installed on most modern Li
 
 On a RHEL9/Alma9/EL9 host this will drop you into a CentOS7 sandbox for development
 
-> ./appBox
+> ./appBox -ra
 
 If you want root access to the same sandbox you can use:
 
