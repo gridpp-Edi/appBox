@@ -22,15 +22,15 @@ This tool does not require additional packages to be installed on most modern Li
 
 # Usage:
 
-## Simplest
+<pre> > ./appBox -ra
+</pre>
 
 On a RHEL9/Alma9/EL9 host this will drop you into a CentOS7 sandbox for development
 
-> ./appBox -ra
-
 If you want root access to the same sandbox you can use:
 
-> ./appBox -rar
+<pre> > ./appBox -rar
+</pre>
 
 ### What did this do?
 
@@ -43,7 +43,8 @@ You can configure what image it downloads from dockerhub. You can configure 'whe
 
 ## More advanced Usage
 
-> ./appBox -ii tensorflow/tensorflow:latest-gpu-jupyter -ip $HOME/tf-w-gpu-support -rar -add_nv
+<pre> > ./appBox -ii tensorflow/tensorflow:latest-gpu-jupyter -ip $HOME/tf-w-gpu-support -rar -add_nv
+</pre>
 
 This will grab the latest tensorflow image from dockerhub which has been installed with working GPU support and jupyter notebooks.
 It will install it into your home area within a folder you choose.
