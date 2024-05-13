@@ -434,7 +434,7 @@ class sandboxFixes():
         # which means...
         # well...
         # yeah...
-        base_path_list = ['/afs', '/dev', '/etc', '/cvmfs', '/scratch', '/Data', '/localdisk', '/sys', '/tmp', '/home', '/proc', '/tmp/{}'.format(getUN())]
+        base_path_list = ['/afs', '/dev', '/etc', '/cvmfs', '/scratch', '/Data', '/localdisk', '/sys', '/tmp', '/home', '/proc', '/tmp/{}'.format(getUN()), '/mnt']
 
         if self.add_nvidia:
             base_path_list.append('/usr/lib/wsl')
@@ -895,7 +895,7 @@ class sessionManager():
         '''
         This is a list of directories to be mounted into the sandbox from the host
         '''
-        mounts = ['/afs', '/home', '/tmp', '/dev', '/cvmfs', '/scratch', '/Data', '/localdisk', '/sys', ]
+        mounts = ['/afs', '/home', '/tmp', '/dev', '/cvmfs', '/scratch', '/Data', '/localdisk', '/sys', '/mnt']
         if self.add_nvidia:
             mounts += ['/usr/lib/wsl', '/usr/bin/nvidia-smi', '/usr/bin/nvidia-modprobe']
         return mounts
