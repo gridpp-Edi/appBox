@@ -1,4 +1,16 @@
 
+# About
+
+AppBox was written to address the following problems:
+
+- “I want to keep running my CentOS7 code to do my work”
+- “I'm new to ML/AI how do I setup a software development environment with hardware acceleration?”
+- “I can't run on Ubuntu I need Scientific Linux.”
+- “I can't run on whatever this system is but it works in my laptop.”
+
+AppBox solves these problems by proving an automated tool for setting up and starting/running sandboxes as a normal user.
+This tool does not require additional packages to be installed on most modern Linux systems where user namespaces have been deployed.
+
 
 # Usage:
 
