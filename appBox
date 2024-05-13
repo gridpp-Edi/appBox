@@ -1416,10 +1416,12 @@ def main():
     if parsed_args.launch:
         wanted_dest = parsed_args.launch
         should_run = True
+        wanted_image = None
     if parsed_args.launch_root:
         wanted_dest = parsed_args.launch_root
         as_root = True
         should_run = True
+        wanted_image = None
 
     if parsed_args.run_after:
         should_run = True
@@ -1467,6 +1469,9 @@ def main():
     if not os.path.exists(wanted_dest):
         appLogger.info('Sandbox: "%s" does not exist.', wanted_dest)
         if not lower_layer:
+            if wanted_image is None:
+                appLogger.error('Please install before trying to launch a sandbox.')
+                sys.exit(87)
             appLogger.info('Installing: "%s" at "%s"', wanted_image, wanted_dest)
             need_to_install = True
         else:
@@ -1475,7 +1480,7 @@ def main():
 
 
     rc = False
-    if need_to_install and not lower_layer:
+    if need_to_install and not lower_layer and wanted_image:
 
         ## TODO
         ## Add some way of handling images from other sources
