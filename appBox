@@ -1518,4 +1518,13 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except KeyboardInterrupt as err:
+        if appLogger:
+            appLogger.error('Aborting due to user request.')
+            if appLogger.level == appLogger.debug:
+                print(err)
+        else:
+            print('Aborting due to user request.')
+
