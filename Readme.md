@@ -17,6 +17,7 @@ AppBox was written to address the following problems:
 - “I'm new to ML/AI how do I setup a software development environment with hardware acceleration?”
 - “I can't run on Ubuntu I need Scientific Linux.”
 - “I can't run on whatever this system is but it works in my laptop.”
+- "I want to make a development environment I can more easily _take with me_ from machine to machine."
 
 AppBox solves these problems by proving an automated tool for setting up and starting/running sandboxes as a normal user.
 This tool does not require additional packages to be installed on most modern Linux systems where user namespaces have been deployed.
@@ -34,14 +35,40 @@ If you want root access to the same sandbox you can use:
 <pre> > ./appBox -rar
 </pre>
 
-### What did this do?
+### What did this just do?
 
-Thie downloaded the docker image _"centos:7"_ from dockerhub. Extracted it as a sandbox. Made some changes to make sure it works well. And then openned an interactive terminal within this sandbox environment.
+1. Downloaded the docker image _"centos:7"_ from dockerhub.
+2. Extracted it as a sandbox to `\scratch\appBox_${USER}\sandbox` or `\tmp\appBox_${USER}\sandbox`.
+3. Made some changes to the sandbox on disk to make sure it works well.
+4. Opened an interactive terminal within this sandbox environment.
 
 ### What else can it do?
 
-You can configure what image it downloads from dockerhub. You can configure 'where it installs the image to' and you can configure a few other useful things.
+- You can download any image from dockerhub.
+- You can configure 'where it installs the image to'
+- You can configure a few other useful things.
+- You can copy/delete/move this sandbox folder as a normal user from machine to machine or from location to location.
+- You can run this from an external drive if you want to.
 
+### What can I do now?
+
+You can exit and re-enter.
+
+- `deactivate` has been setup to perform the same action as `exit`\\`logout` from the sandbox.
+
+- You can re-enter the same sandbox as a normal user:<br>
+ `source \scratch\appBox_${USER}\sandbox\activate`<br>
+ This account is effectively just 'you' within the sandbox env.
+
+- You can re-enter the same sandbox as a _'root'_ user:<br>
+ `source \scratch\appBox_${USER}\sandbox\activate-asroot`<br>
+ This is a pseudo-root account which can install software within the sandbox env.
+
+- You can copy/move this sandbox.
+- You can share this sandbox.
+- You can rsync this sandbox from one machine to another.<br>
+ `rsync -avP --delete USER@SERVER:/scratch/appBox_rcurrie4/sandbox/ ./sandbox-copy`<br>
+ `appBox -l ./sandbox-copy -ra`
 
 ## More advanced Usage
 
