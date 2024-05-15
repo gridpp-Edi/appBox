@@ -86,19 +86,13 @@ All without needing local root/admin access.
 
 # FAQs:
 
-AppBox does not respect user or group settings.
-
-AppBox does not provide isolation from sandbox doing her things to user data on the host.
-
-AppBox does allow a user to do everything they have the privileges/permissions to do normally.
-
-AppBox ‘could’ have been written in bash or go.
-
-AppBox isn't a solution looking for a problem. It's fix for what is a usability issue in this area of software development.
-
-AppBox aims to make my life and the life of others easier.
-
-Could I just use Apptainer and ignore this? - Yes, but this tool is about making your life easier. How much time is wasted chaining sandbox options and fake root permissions together?
+- **AppBox does not respect user or group settings within the sandbox.**<br><br> Why would it, it's intended to be run as a single user.<br><br>
+- **AppBox does not provide isolation from sandbox doing her things to user data on the host.**<br><br> This does not take advantage of network-namespaces or attempt to isolate the users data from the host. X11 forwarding even works.<br><br>
+- **AppBox allows a user to do everything they have the privileges/permissions to do normally.**<br><br> This is why it exists.<br><br>
+- **AppBox ‘could’ have been written in bash or go.**<br><br> I might one day do this, but frankly I know Python3 and everyone has Python3+namespaces enabled these days.<br><br>
+- **AppBox isn't a solution looking for a problem.**<br><br> It's fix for what is a usability issue in this area of software development. If Apptainer rises to the challenge this could quickly become obsolete.<br><br>
+- **AppBox aims to make my life and the life of others easier.**<br><br> If it does a thanks is welcome, but go buy yourself a coffee and enjoy the time this will save you.<br><br>
+- **Could I just use Apptainer and ignore this?**<br><br> Yes, but this tool is about making your life easier. How much time is wasted chaining sandbox options and fake root permissions together?<br><br>
 
 
 For more info see FAQ.md
