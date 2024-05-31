@@ -72,17 +72,24 @@ You can exit and re-enter.
 
 ## More advanced Usage
 
-<pre> > ./appBox -ii tensorflow/tensorflow:latest-gpu-jupyter -ip $HOME/tf-w-gpu-support -rar -add_nv
+### Running with 'GPU Support'
+
+<pre> > ./appBox -ii tensorflow/tensorflow:latest-gpu-jupyter -ip $HOME/tf-w-gpu-support -rar -addNV
 </pre>
 
-This will grab the latest tensorflow image from dockerhub which has been installed with working GPU support and jupyter notebooks.
-It will install it into your home area within a folder you choose.
-It will mount some nvidia components from the host into the sandbox.
-Finally it will drop into a pseudo-root terminal within this sandbox.
+This will grab the latest tensorflow image from dockerhub which has been installed with working GPU support and jupyter notebooks.<br>
+It will install it into your home area within a folder you choose.<br>
+It will mount some nvidia components from the host into the sandbox.<br>
+Finally it will drop into a pseudo-root terminal within this sandbox.<br>
 All without needing local root/admin access.
 
+### Pulling from a GitLab instance
 
+<pre> > ./appBox -ii gitlab-registry.cern.ch/atlas-flavor-tagging-tools/training-images/ml-gpu/ml-gpu:latest -ip /scratch/sandboxATLAS -ra
+</pre>
 
+This will grab an image from the CERN Gitlab instance which is used for ATLAS ml-gpu work.
+This is just a demonstration of how to do this, I don't know what to do in this or why, but it exists for people to grab the sandbox from.
 
 # FAQs:
 
@@ -94,5 +101,32 @@ All without needing local root/admin access.
 - **AppBox aims to make my life and the life of others easier.**<br><br> If it does a thanks is welcome, but go buy yourself a coffee and enjoy the time this will save you.<br><br>
 - **Could I just use Apptainer and ignore this?**<br><br> Yes, but this tool is about making your life easier. How much time is wasted chaining sandbox options and fake root permissions together?<br><br>
 
+
+# Missing Features/TODO
+
+
+## Support for private repos
+
+Currently this tool only works with public Docker and public GitLab instances which provide a download auth-token system.
+This will be modified in time to support either env vars or a direct user/pass challenge to get secure tokens, but this right now is low(er) priority.
+
+## Support for quay.io
+
+Currently this tool does not look for and catch the 'no-redirect' on a quay.io repository. According to RHEL docs public support for this repo service doesn't issue tokens for downloads.
+
+## Support for AMD GPU
+
+Don't have one. I plan to read the code from Apptainer and borrow their dev mount setup to provide rocm support.
+In principle this _should_ come for free when running in WSL as we just bind the WSL plan9 guest mount, but YMMV.
+
+## Tested support for nVidia GPU on bare metal Linux host
+
+Don't have one of these either. Again I plan to study how Apptainer does this and copy their solution for nVidia support within containers.
+
+## Support for Windows/MacOS
+
+Neither of these support containers directly. Both just launch a Linux VM and run containers in that. A Linux VM on either **will** work as expected.
+
+## Support for 
 
 For more info see FAQ.md
