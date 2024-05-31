@@ -127,6 +127,10 @@ Don't have one of these either. Again I plan to study how Apptainer does this an
 
 Neither of these support containers directly. Both just launch a Linux VM and run containers in that. A Linux VM on either **will** work as expected.
 
-## Support for 
+## Support for cachine container layers
+
+Right now only complete sandboxes are captured/cached.
+With a bit of re-factoring the code can cache single layers from complex containers, but for now this has been decided to be 'enough for now'.
 
 For more info see FAQ.md
+

@@ -1,4 +1,7 @@
 #!/bin/env python3
+# -*- coding: utf-8 -*-
+# vim:fileencoding=utf-8
+# pylint: disable=C0302,C0111,C0103
 #
 #   ▄▀▀█▄   ▄▀▀▄▀▀▀▄  ▄▀▀▄▀▀▀▄  ▄▀▀█▄▄   ▄▀▀▀▀▄   ▄▀▀▄  ▄▀▄
 #  ▐ ▄▀ ▀▄ █   █   █ █   █   █ ▐ ▄▀   █ █      █ █    █   █
@@ -167,12 +170,19 @@ class imageSource:
         Write some info about this sandbox to a file
         '''
         proto, netLoc, imageLabel, tag = self.parseImgString(image)
+        try:
+            manifests = self.manifestCache[imageLabel]
+            layerCache = self.layerCache[imageLabel]
+        except KeyError as keyErr:
+            _ = keyErr
+            manifests = {}
+            layerCache = {}
         appBoxMetaData = { '__version__': appBoxVersion,
                             'containerName': f'{proto}://{netLoc}/{imageLabel}:{tag}',
                             'installedTime': f'{time.time()}',
-                            'manifests': self.manifestCache[imageLabel],
-                            'layers': self.layerCache[imageLabel],
-                          }
+                            'manifests': manifests,
+                            'layers': layerCache,
+                         }
         json.dump(appBoxMetaData, _file, ensure_ascii=True, indent=2)
 
     def dumpContainerInfo(self, metaData):
@@ -182,7 +192,7 @@ class imageSource:
         with open(metaData, 'r', encoding='utf-8') as _file:
             appBoxData = json.loads(_file.read())
 
-        appLogger.info(appBoxData)
+        appLogger.debug(appBoxData)
 
     def getArch(self):
         '''
@@ -582,7 +592,8 @@ class sandboxFixes():
         Copy certain configs from the host to the sandbox so things work
         '''
 
-        fileList = ['/etc/resolv.conf', '/etc/hostname', '/etc/localtime', '/etc/timezone', '/etc/vimrc']
+        fileList = ['/etc/resolv.conf', '/etc/hostname',
+                    '/etc/localtime', '/etc/timezone', '/etc/vimrc']
 
         for _file in fileList:
             self.sandboxInstance.copyFileFromHost(_file,
@@ -630,7 +641,8 @@ class sandboxFixes():
 
         absPaths = []
         for _path in neededSandboxPaths:
-            absPaths.append(os.path.abspath(os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_path)))
+            absPaths.append(os.path.abspath(
+                        os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_path)))
 
         for _path in absPaths:
             self.sandboxInstance.createSandboxPath(_path)
@@ -655,7 +667,8 @@ class sandboxFixes():
 
         absPaths = []
         for _path in neededStubs:
-            absPaths.append(os.path.abspath(os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_path)))
+            absPaths.append(os.path.abspath(
+                        os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_path)))
 
         for _path in absPaths:
             self.sandboxInstance.createSandboxEmptyFile(_path)
@@ -708,9 +721,11 @@ class sandboxFixes():
                 _user, _, _uid, _gid, _name, _home, _shell = _line.split(':')
                 if _user in ['root', getUN(), 'fax', 'input', 'kvm', 'render']:
                     continue
-                if _user.startswith('systemd'): # A dirty trick to keep apt 'content' on Ubuntu systems
+                if _user.startswith('systemd'):
+                    # A dirty trick to keep apt 'content' on Ubuntu systems
                     continue
-                appLogger.debug('User: "%s", UID: "%s", GID: "%s", Name: "%s", Home: "%s", Shell: "%s"',
+                appLogger.debug(
+                    'User: "%s", UID: "%s", GID: "%s", Name: "%s", Home: "%s", Shell: "%s"',
                                     _user, _uid, _gid, _name, _home, _shell)
 
                 newContent += f'{_user}:x:{aUID}:{aGID}:{_name}:{_home}:{_shell}\n'
@@ -741,7 +756,8 @@ class sandboxFixes():
                 _group, _, _gid, _users = _line.split(':')
                 if _group in ['root', getUN(), 'fax', 'input', 'kvm', 'render']:
                     continue
-                if _group.startswith('systemd'): # A dirty trick to keep apt 'content' on Ubuntu systems
+                if _group.startswith('systemd'):
+                    # A dirty trick to keep apt 'content' on Ubuntu systems
                     continue
                 appLogger.debug('Group: "%s", GID: "%s", Users: "%s"', _group, _gid, _users)
 
@@ -796,7 +812,7 @@ class sandboxFixes():
                 _file.write('alias deactivate=exit')
 
             self.sandboxInstance.copyFileFromHost(tmpDeacScript,
-                        os.path.join(self.sandboxInstance.getSandboxPath(), './etc/profile.d/deac.sh'))
+                    os.path.join(self.sandboxInstance.getSandboxPath(), './etc/profile.d/deac.sh'))
 
         fixDeactivate()
 
@@ -812,7 +828,7 @@ class sandboxFixes():
             with open(tmpLDPath, 'w+', encoding='utf-8') as _file:
                 _file.write('/usr/lib/wsl/lib')
             self.sandboxInstance.copyFileFromHost(tmpLDPath,
-                        os.path.join(self.sandboxInstance.getSandboxPath(), './etc/ld.so.conf.d/wsl.conf'))
+                os.path.join(self.sandboxInstance.getSandboxPath(), './etc/ld.so.conf.d/wsl.conf'))
 
     def fixAptSandboxing(self):
         '''
@@ -840,10 +856,10 @@ class sandboxFixes():
             ## cp /bin/true /usr/bin/dpkg-statoverride
 
             shutil.copyfile(os.path.join(self.sandboxInstance.getSandboxPath(), 'bin/true'),
-                            os.path.join(self.sandboxInstance.getSandboxPath(), 'usr/bin/dpkg-statoverride'))
+                os.path.join(self.sandboxInstance.getSandboxPath(), 'usr/bin/dpkg-statoverride'))
 
             shutil.copyfile(os.path.join(self.sandboxInstance.getSandboxPath(), 'bin/true'),
-                            os.path.join(self.sandboxInstance.getSandboxPath(), 'bin/dpkg-statoverride'))
+                    os.path.join(self.sandboxInstance.getSandboxPath(), 'bin/dpkg-statoverride'))
 
     def installAppBox(self):
         '''
@@ -886,12 +902,14 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
     def fixForLies(self):
         '''
-        Override some commands to stop people doing bad things by accident, or on-purpose to themselves
+        Override some commands to stop people doing bad things by accident,
+        or on-purpose to themselves
         '''
 
         ## TODO decide if this is a bad idea or not...
-        ## Intention here is to 'stop' automated tooling from trying to do something bad within the sandbox
-        ## This has the side-effect of stopping people changing a file so that they can't so anything with it
+        ## Intention here is to 'stop' automated tooling from trying to do something
+        ## bad within the sandbox. This has the side-effect of stopping people changing
+        ## a file so that they can't so anything with it without magic cmdline-fu (d'oh!)
 
         for _file in ['/usr/bin/chown', '/usr/bin/chmod', '/bin/chown', '/bin/chmod', ]:
             self.sandboxInstance.copyFileFromHost(
@@ -933,8 +951,9 @@ class sessionManager():
         Return the path to the sandbox
         '''
         if self.rootfs:
-            appLogger.debug('Sandbox Path: %s', os.path.join(self.sandboxPath, '._appBoxLayers/overlay'))
-            return os.path.join(self.sandboxPath, '._appBoxLayers/overlay')
+            rootFS = os.path.join(self.sandboxPath, '._appBoxLayers/overlay')
+            appLogger.debug('Sandbox Path: %s', rootFS)
+            return rootFS
         else:
             appLogger.debug('Sandbox Path: %s', self.sandboxPath)
             return self.sandboxPath
@@ -1031,7 +1050,7 @@ class sessionManager():
             appLogger.debug('---')
 
         if not self.pidChild:
-            raise SystemError('Cannot Fork Child Process. Are you trying to run appBox inside appBox?')
+            raise SystemError('Cannot Fork Child Process. Are you trying to run inside appBox?')
 
         return self.pidParent, self.pidChild
 
@@ -1044,7 +1063,7 @@ class sessionManager():
                             self.pidChild, copyCMD)
 
         copyProc = subprocess.Popen(
-                        f'nsenter --preserve-credentials --user --mount --pid -t {self.pidChild} {copyCMD}',
+                f'nsenter --preserve-credentials --user --mount --pid -t {self.pidChild} {copyCMD}',
                         stdin = subprocess.PIPE,
                         stdout = subprocess.PIPE,
                         stderr = subprocess.PIPE,
@@ -1093,7 +1112,7 @@ class sessionManager():
                             pidSpace, createCMD)
 
         createProc = subprocess.Popen(
-                        f'nsenter --preserve-credentials --user --mount --pid -t {pidSpace} {createCMD}',
+                f'nsenter --preserve-credentials --user --mount --pid -t {pidSpace} {createCMD}',
                         stdin = subprocess.PIPE,
                         stdout = subprocess.PIPE,
                         stderr = subprocess.PIPE,
@@ -1110,7 +1129,7 @@ class sessionManager():
         createCMD = f'touch {os.path.abspath(path)}'
 
         createProc = subprocess.Popen(
-                        f'nsenter --preserve-credentials --user --mount --pid -t {self.pidChild} {createCMD}',
+            f'nsenter --preserve-credentials --user --mount --pid -t {self.pidChild} {createCMD}',
                         stdin = subprocess.PIPE,
                         stdout = subprocess.PIPE,
                         stderr = subprocess.PIPE,
@@ -1167,7 +1186,8 @@ class sessionManager():
                 pidSpace = overridePID
                 mountOpts = '--rbind'
 
-            appLogger.debug('nsenter --preserve-credentials --user --mount --pid -t %s mount %s %s %s',
+            appLogger.debug(
+                'nsenter --preserve-credentials --user --mount --pid -t %s mount %s %s %s',
                                 pidSpace, mountOpts, hostPath, sandboxPath)
 
             mountCMD = 'nsenter --preserve-credentials --user --mount --pid -t'
@@ -1209,7 +1229,7 @@ class sessionManager():
         appLogger.debug('Mounting rootfs via: %s', rootfsMountCMD)
 
         mountProc = subprocess.Popen(
-            f'nsenter --preserve-credentials --user --mount --pid -t {self.pidChild} {rootfsMountCMD}',
+        f'nsenter --preserve-credentials --user --mount --pid -t {self.pidChild} {rootfsMountCMD}',
                         stdin = subprocess.PIPE,
                         stdout = subprocess.PIPE,
                         stderr = subprocess.PIPE,
@@ -1225,12 +1245,12 @@ class sessionManager():
         '''
         # restore tty settings back
         try:
-            os.write(sys.stdin.fileno(), '\n\r'.encode())
-            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.oldTTY)
+            #os.write(sys.stdin.fileno(), '\n\r'.encode())
+            # Restore the stdin back to what it used to be
+            termios.tcsetattr(sys.stdin, termios.TCSANOW, self.oldTTY)
             sys.stdin.flush()
             sys.stdout.flush()
             del self.proc
-            self.proc = None
         except (IOError, OSError) as delErr:
             appLogger.debug('Deletion Error: %s', delErr)
 
@@ -1290,13 +1310,15 @@ class sessionManager():
         if not self.compatV1:
             # Continue as Normal and use good hosts unshare
             if asRoot:
-                chrootCMD = f'/bin/bash -c \'mount -t tmpfs tmpfs {self.getSandboxPath()}/run;'
-                chrootCMD = chrootCMD + f' unshare -priUmf --mount --mount-proc -R {self.getSandboxPath()}'
-                chrootCMD = chrootCMD + f' --propagation=unchanged {command};\' exit $?'
+                chrootCMD = f'/bin/bash -c \'mount -t tmpfs tmpfs {self.getSandboxPath()}/run; '
+                chrootCMD = chrootCMD + 'unshare -priUmf --mount --mount-proc -R '
+                chrootCMD = chrootCMD + f'{self.getSandboxPath()} --propagation=unchanged '
+                chrootCMD = chrootCMD + f'{command};\' exit $?'
             else:
                 chrootCMD = f'/bin/bash -c \'mount -t tmpfs tmpfs {self.getSandboxPath()}/run;'
-                chrootCMD = chrootCMD + f'unshare -piUmf --mount --mount-proc -R {self.getSandboxPath()}'
-                chrootCMD = chrootCMD + f' --propagation=unchanged {command};\' exit $?'
+                chrootCMD = chrootCMD + 'unshare -piUmf --mount --mount-proc -R '
+                chrootCMD = chrootCMD + f'{self.getSandboxPath()} --propagation=unchanged '
+                chrootCMD = chrootCMD + f'{command};\' exit $?'
         else:
             # Use the older compatibility mode for the sandbox,
             # use chroot and drop the '-R' unshare arg...
@@ -1642,7 +1664,7 @@ def runCommand(sandboxPath, command, asRoot, compatV1=False, addNV=False, rootfs
 
         return rc
 
-    except BaseException as globalErr:
+    except BaseException as globalErr: # pylint: disable=broad-except
         appLogger.error('Exception during running appBox Shell: %s', globalErr)
         thisSandbox.cleanupSpaces()
         if appLogger.level == logging.DEBUG:
@@ -1816,14 +1838,14 @@ def main():
         rc = runCommand(wantedDest, commandToRun, asRoot, compatV1, addNV, lowerLayer)
         if parsedArgs.tmp:
             shutil.rmtree(wantedDest)
-        sys.exit(rc)
+        return rc
 
     sys.exit(0)
 
 
 if __name__ == '__main__':
     try:
-        main()
+        RC = main()
     except KeyboardInterrupt as keyboardErr:
         if appLogger:
             appLogger.error('Aborting due to user request.')
@@ -1832,7 +1854,7 @@ if __name__ == '__main__':
         else:
             print('Aborting due to user request.')
         sys.exit(129)
-    except BaseException as mainErr:
+    except BaseException as mainErr: # pylint: disable=broad-except
         if appLogger:
             appLogger.error('Exception: %s', mainErr)
             if appLogger.level == logging.DEBUG:
@@ -1840,3 +1862,4 @@ if __name__ == '__main__':
         else:
             print('Exception: %s', mainErr)
         sys.exit(130)
+    sys.exit(RC)
