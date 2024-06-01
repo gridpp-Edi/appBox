@@ -1,6 +1,6 @@
 
 <p align='center'>
-<img src="https://raw.githubusercontent.com/gridpp-Edi/appBox/master/logo.png?raw=true" width=256 align="center"> 
+<img src="https://raw.githubusercontent.com/gridpp-Edi/appBox/master/logo.png?raw=true" width=512 align="center"> 
 </p>
 
 <pre>
