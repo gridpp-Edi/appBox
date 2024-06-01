@@ -825,7 +825,7 @@ class sandboxFixes():
             self.sandboxInstance.copyFileFromHost(tmpLDPath,
                 os.path.join(self.sandboxInstance.getSandboxPath(), './etc/ld.so.conf.d/wsl.conf'))
 
-        def setEnvVar(tmpShadowFile):
+        def setEnvVar(tmpENVFile):
             envs = 'export DEBIAN_FRONTEND="noninteractive"\n'
             with open(tmpENVFile, 'w+', encoding='utf-8') as _file:
                 _file.write(envs)
