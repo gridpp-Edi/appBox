@@ -548,7 +548,7 @@ class dockerRepo(imageSource):
         with open(appBoxFile, 'w+', encoding='utf-8') as _file:
             self.writeContainerInfo(_file, image, tag)
 
-        return True
+        return 0
 
 
 class sandboxFixes():
@@ -865,6 +865,7 @@ class sandboxFixes():
         '''
         Install the appBox tool into the sandbox
         '''
+
         currentInstance = os.path.abspath(__file__)
         if not os.path.exists(os.path.join(self.sandboxInstance.sandboxPath, './bin')):
             os.makedirs(os.path.join(self.sandboxInstance.sandboxPath, './bin'))
@@ -1642,7 +1643,7 @@ RH7>
         return parser
 
 
-def runCommand(sandboxPath, command, asRoot, compatV1=False, addNV=False, rootfs=None):
+def runCommand(sandboxPath, command, asRoot, compatV1=False, addNV=False, rootfs=None, runCMD=True):
     '''
     Run a command within a sandbox
     '''
@@ -1660,7 +1661,10 @@ def runCommand(sandboxPath, command, asRoot, compatV1=False, addNV=False, rootfs
         theseFixes = sandboxFixes(addNV, thisSandbox)
         theseFixes.applyAllFixes()
 
-        rc = thisSandbox.runCommand(command, asRoot)
+        if runCMD:
+            rc = thisSandbox.runCommand(command, asRoot)
+        else:
+            rc = 0
 
         return rc
 
@@ -1671,7 +1675,8 @@ def runCommand(sandboxPath, command, asRoot, compatV1=False, addNV=False, rootfs
             raise
         sys.exit(131)
     finally:
-        thisSandbox.cleanupSpaces()
+        if runCMD:
+            thisSandbox.cleanupSpaces()
 
 
 def main():
@@ -1820,8 +1825,13 @@ def main():
 
         # Extract the image to the destination path
         try:
-
             rc = imageManager.buildSandbox(wantedImage, wantedDest)
+            if rc != 0:
+                return rc
+            runCMD=False
+            rc = runCommand(wantedDest, commandToRun, asRoot, compatV1, addNV, lowerLayer, runCMD)
+            if rc != 0:
+                return rc
 
         except PermissionError as permissionErr:
             appLogger.error('Permission Denied.')
