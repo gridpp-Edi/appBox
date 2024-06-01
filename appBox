@@ -803,7 +803,8 @@ class sandboxFixes():
             tmpDeacScript = os.path.join(self.tmpPath, f'deactivate_{str(uuid.uuid4())[:8]}')
             with open(tmpDeacScript, 'w+', encoding='utf-8') as _file:
                 _file.write('#!/bin/bash\nkill -s 1 1\n')
-            os.chmod(tmpDeacScript, stat.S_IEXEC)
+            st = os.stat(tmpDeacScript)
+            os.chmod(tmpDeacScript, st.st_mode | stat.S_IEXEC)
 
             self.sandboxInstance.copyFileFromHost(tmpDeacScript,
                     os.path.join(self.sandboxInstance.getSandboxPath(), './usr/bin/deactivate'))
@@ -1130,6 +1131,7 @@ class sessionManager():
 
         ## TODO add better error checking here
         createProc.wait()
+        appLogger.debug('CreatePath RC: %s', createProc.poll())
         del createProc
 
     def createSandboxEmptyFile(self, path):
@@ -1147,6 +1149,7 @@ class sessionManager():
 
         ## TODO add better error checking here
         createProc.wait()
+        appLogger.debug('CreateFile RC: %s', createProc.poll())
         del createProc
 
     def getChildID(self, thisPID):
@@ -1210,7 +1213,7 @@ class sessionManager():
                             shell=True)
             mountProc.wait()
             ## TODO add better error checking here
-
+            appLogger.debug('MountHost RC: %s', mountProc.poll())
             del mountProc
 
     def mountrootfs(self, rootfs):
@@ -1247,6 +1250,7 @@ class sessionManager():
 
         ## TODO add better error checking here
         mountProc.wait()
+        appLogger.debug('Mount RC: %s', mountProc.poll())
         del mountProc
 
     def cleanupSpaces(self):
@@ -1593,14 +1597,6 @@ RH7>
 
         defaultRoot = f'{leadingPath}/appBox_{getUN()}/sandbox'
 
-        #parser.add_argument('-ri', '--run-interactive',
-        #                    type=str, default=default_root,
-        #                    help='Launch a sandbox shell from this location.')
-
-        #parser.add_argument('-rir', '--run-interactive-root',
-        #                    type=str, default=default_root,
-        #                    help='Launch a sandbox shell AS ROOT from this location.')
-
         #default_image = 'almalinux:9'
         defaultImage = 'centos:7'
 
@@ -1618,17 +1614,12 @@ RH7>
         parser.add_argument('-rar', '--run-after-root', action='store_true',
                             help='Should we drop into the new sandbox AS ROOT after installing.')
 
-        #parser.add_argument('-li', '--list-images', action='store_true',
-        #                    help='List suggested images to "install".')
 
         parser.add_argument('-q', '--quiet', action='store_true',
                             help='Quiet')
 
         parser.add_argument('-d', '--debug', action='store_true',
                             help='Debugging on.')
-
-        #parser.add_argument('-ds', '--dump-settings', action='store_true',
-        #                    help='Dump settings used by this instance.')
 
         parser.add_argument('-l', '--launch',
                             help='Launch Interactive environment from ...')
@@ -1751,19 +1742,13 @@ def main():
         asRoot = True
         shouldRun = True
 
+    # TODO fix cvmfs fusermount alternative approach
     #if parsedArgs.use_cvmfs:
     #    lowerLayer = parsedArgs.use_cvmfs
     #    shouldRun = True
     #    #cvmfs_sandbox(parsedArgs.use_cvmfs, wantedDest, None, True)
     #    #sys.exit(-200)
 
-    #if parsedArgs.run_interactive:
-    #    wantedDest = parsedArgs.run_interactive
-    #    shouldRun = True
-    #if parsedArgs.run_interactive_root:
-    #    wantedDest = parsedArgs.run_interactive_root
-    #    asRoot = True
-    #    shouldRun = True
 
     def platformDetection():
         platStr = platform.platform()
@@ -1780,14 +1765,6 @@ def main():
         appLogger.warning('To disable this warning, use the -compat cmd arg.')
         compatV1 = True
 
-
-    #image_manager = dockerRepo()
-    ## Pull the image from the source to a temp folder
-    #image_manager.pullImage('https://gitlab-registry.cern.ch/linuxsupport/alma9-base:latest')
-    #image_manager.pullImage('linuxsupport/alma9-base')
-    #image_manager = dockerRepo()
-    # Pull the image from the source to a temp folder
-    #image_manager.pullImage('cern/alma9-base')
 
     wantedDest = os.path.abspath(wantedDest)
 
