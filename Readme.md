@@ -1,6 +1,6 @@
 
 <p style="text-align: center;">
-![logo](logo.png)
+![logo](https://raw.githubusercontent.com/gridpp-Edi/appBox/master/logo.png)
 </p>
 
 <pre>
