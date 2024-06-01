@@ -1,6 +1,6 @@
 
 <p style="text-align: center;">
-![logo][logo.png]
+![logo](logo.png)
 </p>
 
 <pre>
