@@ -1,6 +1,7 @@
 
+<p style="text-align: center;">
 <img src="https://raw.githubusercontent.com/gridpp-Edi/appBox/master/logo.png?raw=true" width=256> 
-
+</p>
 <pre>
         █████╗ ██████╗ ██████╗ ██████╗  ██████╗ ██╗  ██╗
        ██╔══██╗██╔══██╗██╔══██╗██╔══██╗██╔═══██╗╚██╗██╔╝
