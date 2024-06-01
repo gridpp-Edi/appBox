@@ -580,13 +580,6 @@ class sandboxFixes():
         self.copyFromHost()
         self.fixForLies()
 
-    def applySafeFixes(self):
-        '''
-        Apply only a _safe_ subset of the fixes to this sandbox
-        '''
-        self.fixUserAccounts()
-        self.copyFromHost()
-
     def copyFromHost(self):
         '''
         Copy certain configs from the host to the sandbox so things work
@@ -807,12 +800,13 @@ class sandboxFixes():
                     os.path.join(self.sandboxInstance.getSandboxPath(), './etc/profile.d'))
 
         def fixDeactivate():
-            tmpDeacScript = os.path.join(self.tmpPath, f'deac.sh_{str(uuid.uuid4())[:8]}')
+            tmpDeacScript = os.path.join(self.tmpPath, f'deactivate_{str(uuid.uuid4())[:8]}')
             with open(tmpDeacScript, 'w+', encoding='utf-8') as _file:
-                _file.write('alias deactivate=exit')
+                _file.write('#!/bin/bash\nkill -s 1 1\n')
+            os.chmod(tmpDeacScript, stat.S_IEXEC)
 
             self.sandboxInstance.copyFileFromHost(tmpDeacScript,
-                    os.path.join(self.sandboxInstance.getSandboxPath(), './etc/profile.d/deac.sh'))
+                    os.path.join(self.sandboxInstance.getSandboxPath(), './usr/bin/deactivate'))
 
         fixDeactivate()
 
@@ -829,6 +823,19 @@ class sandboxFixes():
                 _file.write('/usr/lib/wsl/lib')
             self.sandboxInstance.copyFileFromHost(tmpLDPath,
                 os.path.join(self.sandboxInstance.getSandboxPath(), './etc/ld.so.conf.d/wsl.conf'))
+
+        def setEnvVar(tmpShadowFile):
+            envs = 'export DEBIAN_FRONTEND="noninteractive"\n'
+            with open(tmpENVFile, 'w+', encoding='utf-8') as _file:
+                _file.write(envs)
+            self.sandboxInstance.copyFileFromHost(tmpENVFile,
+                    os.path.join(self.sandboxInstance.getSandboxPath(), './etc/profile.d/env.sh'))
+
+        tmpENVFile = os.path.join(self.tmpPath, f'env.sh_{str(uuid.uuid4())[:8]}')
+        try:
+            setEnvVar(tmpENVFile)
+        finally:
+            os.unlink(tmpENVFile)
 
     def fixAptSandboxing(self):
         '''
@@ -912,7 +919,8 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
         ## bad within the sandbox. This has the side-effect of stopping people changing
         ## a file so that they can't so anything with it without magic cmdline-fu (d'oh!)
 
-        for _file in ['/usr/bin/chown', '/usr/bin/chmod', '/bin/chown', '/bin/chmod', ]:
+        for _file in ['/usr/bin/chown', '/bin/chown',
+                      '/usr/bin/su', '/bin/su', '/usr/bin/sudo', '/bin/sudo']:
             self.sandboxInstance.copyFileFromHost(
                             os.path.join(self.sandboxInstance.getSandboxPath(), 'bin/true'),
                             os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_file))
@@ -1059,7 +1067,7 @@ class sessionManager():
         '''
         Copy files from A to B
         '''
-        copyCMD = f'cp -rfHL {source} {dest}'
+        copyCMD = f'cp -rfHL --remove-destination {source} {dest}'
         appLogger.debug('nsenter --preserve-credentials --user --mount --pid -t %s %s',
                             self.pidChild, copyCMD)
 
@@ -1072,7 +1080,8 @@ class sessionManager():
 
         ## TODO add better error checking here
         copyProc.wait()
-        appLogger.debug(copyProc.poll())
+        copyRC = copyProc.poll()
+        appLogger.debug('Copy RC: %s', copyRC)
         del copyProc
 
     def copyFileFromHost(self, hostFile, sandboxFile):
@@ -1801,7 +1810,7 @@ def main():
             needToInstall = False
 
 
-    rc = False
+    rc = 0
     if needToInstall and not lowerLayer and wantedImage:
 
         ## TODO
