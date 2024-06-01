@@ -1,7 +1,5 @@
 
-<div style="text-align:center">
-<img src="https://raw.githubusercontent.com/gridpp-Edi/appBox/master/logo.png?raw=true" width=256> 
-</div>
+<img src="https://raw.githubusercontent.com/gridpp-Edi/appBox/master/logo.png?raw=true" width=256 align="center"> 
 
 <pre>
         █████╗ ██████╗ ██████╗ ██████╗  ██████╗ ██╗  ██╗
