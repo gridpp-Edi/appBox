@@ -40,13 +40,16 @@ import pwd
 import re
 import select
 import shutil
+import signal
 import stat
 import struct
 import subprocess
 import sys
 import tarfile
 import termios
+import threading
 import time
+import tty
 import urllib.request
 import urllib.error
 from urllib.parse import urlparse
@@ -57,7 +60,7 @@ import requests
 
 # Global Logger
 appLogger = logging.getLogger('appBox')
-appBoxVersion = '2.1.0'
+appBoxVersion = '2.2.0'
 
 def getUN():
     '''
@@ -394,7 +397,7 @@ class dockerRepo(imageSource):
         for _ in image.split('/'):
             imageCache = f'{imageCache}_{_}'
 
-        return os.path.join(self.imageCacheDir, f'appBox_{imageCache}_{tag}.compressed')
+        return os.path.join(self.imageCacheDir, f'appBox{imageCache}_{tag}.compressed')
 
     def getHeaders(self, token, accept="application/vnd.docker.distribution.manifest.v2+json"):
         '''
@@ -956,6 +959,8 @@ class sessionManager():
         self.rootfs = rootfs
         self._layers = ['._appBoxLayers/overlay', '._appBoxLayers/upper', '._appBoxLayers/work']
 
+        self.ptyMfd, self.ptySfd = None, None
+
     def getSandboxPath(self):
         '''
         Return the path to the sandbox
@@ -1261,7 +1266,7 @@ class sessionManager():
         try:
             #os.write(sys.stdin.fileno(), '\n\r'.encode())
             # Restore the stdin back to what it used to be
-            termios.tcsetattr(sys.stdin, termios.TCSANOW, self.oldTTY)
+            #termios.tcsetattr(sys.stdin, termios.TCSANOW, self.oldTTY)
             sys.stdin.flush()
             sys.stdout.flush()
             del self.proc
@@ -1329,10 +1334,12 @@ class sessionManager():
                 chrootCMD = chrootCMD + f'{self.getSandboxPath()} --propagation=unchanged '
                 chrootCMD = chrootCMD + f'{command};\' exit $?'
             else:
-                chrootCMD = f'/bin/bash -c \'mount -t tmpfs tmpfs {self.getSandboxPath()}/run;'
+                chrootCMD = f'/bin/bash -c \'mount -t tmpfs tmpfs {self.getSandboxPath()}/run; '
                 chrootCMD = chrootCMD + 'unshare -piUmf --mount --mount-proc -R '
                 chrootCMD = chrootCMD + f'{self.getSandboxPath()} --propagation=unchanged '
-                chrootCMD = chrootCMD + f'{command};\' exit $?'
+                chrootCMD = chrootCMD + f'{command}'#'\' exit $?'
+                chrootCMD = f'unshare -piUmf --mount --mount-proc -R {self.getSandboxPath()} '
+                chrootCMD = chrootCMD + f'--propagation=unchanged {command}'
         else:
             # Use the older compatibility mode for the sandbox,
             # use chroot and drop the '-R' unshare arg...
@@ -1358,6 +1365,122 @@ class sessionManager():
 
         return chrootCMD
 
+    def read_from_master(self, process):
+        """Read from the master PTY file descriptor and print to stdout."""
+        try:
+            while True:
+                rlist, _, _ = select.select([self.ptyMfd], [], [], 0.1)
+                if self.ptyMfd in rlist:
+                    data = os.read(self.ptyMfd, 1024)
+                    if data:
+                        sys.stdout.write(data.decode(errors='replace'))
+                        sys.stdout.flush()
+                    else:
+                        break
+                if process.poll() is not None:
+                    break
+        except OSError:
+            pass
+        finally:
+            if process.poll() is None:
+                process.terminate()
+            try:
+                os.close(self.ptyMfd)
+            except OSError:
+                pass
+
+    def write_to_master(self, process):
+        """Write user input to the master PTY file descriptor."""
+        old_settings = termios.tcgetattr(sys.stdin)
+        try:
+            tty.setraw(sys.stdin)
+            while True:
+                rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
+                if sys.stdin in rlist:
+                    user_input = os.read(sys.stdin.fileno(), 1024)
+                    if not user_input:
+                        break
+                    os.write(self.ptyMfd, user_input)
+                if process.poll() is not None:
+                    break
+        except OSError:
+            pass
+        finally:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+            try:
+                os.close(self.ptyMfd)
+            except OSError:
+                pass
+
+    def handle_sigwinch(self, signum, frame): # pylint: disable=locally-disabled, unused-argument
+        """Handle window resize signal and adjust the PTY window size."""
+        s = struct.pack('HHHH', 0, 0, 0, 0)
+        rows, cols, xpixels, ypixels = struct.unpack('HHHH',
+                                                fcntl.ioctl(sys.stdout, termios.TIOCGWINSZ, s))
+        fcntl.ioctl(self.ptyMfd, termios.TIOCSWINSZ,
+                    struct.pack('HHHH', rows, cols, xpixels, ypixels))
+
+    def spawn_bash_terminal(self, command, asRoot=False):
+        """Spawn a bash terminal in a new PTY."""
+        # Open a new pseudo-terminal pair
+        self.ptyMfd, self.ptySfd = pty.openpty()
+
+        # Set up signal handler for window resize
+        signal.signal(signal.SIGWINCH, self.handle_sigwinch)
+        self.handle_sigwinch(None, None)  # Set initial window size
+
+        chrootCMD = self._getSandboxCmd(command, asRoot)
+
+        appLogger.debug('About to execute')
+        appLogger.debug('nsenter --preserve-credentials --user --mount --pid -t %s %s ; exit $?;',
+                                self.pidChild, chrootCMD)
+
+        procCMD = 'nsenter --preserve-credentials --user --mount --pid -t'
+        procCMD = procCMD + f' {self.pidChild} {chrootCMD}; exit $?;'
+
+        # Needed for Ubuntu and Debian related screwiness.
+        # EL based distros HAVE NO ISSUE WITH BASH WORKING OUT THAT PID 1 MEANS
+        # YOU WILL BE IN CHARGE OF SUBPROCESSES
+        # Debian on the other hand is a special snowflake which causes issues
+        # Someone is patching code somewhere OOB and it makes me unhappy :(
+        procCMD = ['/bin/bash', '-c', procCMD]
+
+        appLogger.debug('Running: %s', procCMD)
+        # Start the subprocess with the slave side of the PTY as its stdin, stdout, and stderr
+        # pylint: disable=locally-disabled, subprocess-popen-preexec-fn
+        interactiveProc = subprocess.Popen(
+            procCMD,
+            preexec_fn = os.setsid,  # Start a new session
+            stdin = self.ptySfd,
+            stdout = self.ptySfd,
+            stderr = self.ptySfd,
+            close_fds=True, universal_newlines=True
+        )
+
+        # Close the slave_fd in the parent since it's now handled by the child
+        os.close(self.ptySfd)
+
+        # Interact with the master side of the PTY
+        try:
+            read_thread = threading.Thread(target=self.read_from_master, args=(interactiveProc,))
+            read_thread.start()
+
+            write_thread = threading.Thread(target=self.write_to_master, args=(interactiveProc,))
+            write_thread.start()
+
+            read_thread.join()
+            write_thread.join()
+        except OSError:
+            pass
+        finally:
+            try:
+                os.close(self.ptyMfd)
+            except OSError:
+                pass
+            interactiveProc.wait()
+            # Not 'perfect' to have all of the return from the users code here, but this works well
+            return interactiveProc.returncode #pylint: disable=W0134,W0150
+
     def runCommand(self, command, asRoot=False):
         '''
         Run Said command inside the sandbox env
@@ -1370,15 +1493,28 @@ class sessionManager():
                                 self.pidChild, chrootCMD)
 
         self._wrangleTTY()
-        procCMD = 'nsenter --preserve-credentials --user --mount --pid -t'
-        procCMD = procCMD + f' {self.pidChild} {chrootCMD}; exit $?;'
+        #procCMD = 'nsenter --preserve-credentials --user --mount --pid -t'
+        #procCMD = procCMD + f' {self.pidChild} {chrootCMD}; exit $?;'
+        ## pylint: disable=locally-disabled, subprocess-popen-preexec-fn
+        #interactiveProc = subprocess.Popen(
+        #        procCMD,
+        #        stdin = self.stdoutS,
+        #        stdout = self.stdoutS,
+        #        stderr = self.stdoutS,
+        #        shell = True, universal_newlines = True, preexec_fn=os.setsid
+        #        )
+
         # pylint: disable=locally-disabled, subprocess-popen-preexec-fn
+        procCMD = ['nsenter', '--preserve-credentials', '--user', '--mount',
+                   '--pid', '-t', str(self.pidChild), chrootCMD]
+
+        appLogger.debug('Running: %s', procCMD)
         interactiveProc = subprocess.Popen(
                 procCMD,
                 stdin = self.stdoutS,
                 stdout = self.stdoutS,
                 stderr = self.stdoutS,
-                shell = True, universal_newlines = True, preexec_fn=os.setsid
+                preexec_fn=os.setsid
                 )
 
         i=0
@@ -1662,7 +1798,7 @@ def runCommand(sandboxPath, command, asRoot, compatV1=False, addNV=False, rootfs
         theseFixes.applyAllFixes()
 
         if runCMD:
-            rc = thisSandbox.runCommand(command, asRoot)
+            rc = thisSandbox.spawn_bash_terminal(command, asRoot)
         else:
             rc = 0
 
