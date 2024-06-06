@@ -1176,7 +1176,8 @@ class sessionManager():
         This is a list of directories to be mounted into the sandbox from the host
         '''
         mounts = ['/afs', '/home', '/tmp', '/dev', '/cvmfs',
-                  '/scratch', '/Data', '/localdisk', '/sys', '/mnt']
+                  '/scratch', '/Data', '/localdisk', '/sys', '/mnt',
+                  '/mnt/wsl', '/mnt/wslg']
         if self.addNVidia:
             mounts += ['/usr/lib/wsl', '/usr/bin/nvidia-smi', '/usr/bin/nvidia-modprobe']
         return mounts
