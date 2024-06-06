@@ -1268,6 +1268,8 @@ class sessionManager():
             #os.write(sys.stdin.fileno(), '\n\r'.encode())
             # Restore the stdin back to what it used to be
             #termios.tcsetattr(sys.stdin, termios.TCSANOW, self.oldTTY)
+            if self.proc and self.proc.pid:
+                os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
             sys.stdin.flush()
             sys.stdout.flush()
             del self.proc
@@ -1803,8 +1805,7 @@ def runCommand(sandboxPath, command, asRoot, compatV1=False, addNV=False, rootfs
             raise
         sys.exit(131)
     finally:
-        if runCMD:
-            thisSandbox.cleanupSpaces()
+        thisSandbox.cleanupSpaces()
 
 
 def main():
