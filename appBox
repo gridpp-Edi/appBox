@@ -1484,6 +1484,10 @@ class sessionManager():
     def runCommand(self, command, asRoot=False):
         '''
         Run Said command inside the sandbox env
+
+        This approach has 2 limitations:
+        1. No clean/nice way of intercepting PTY resize events
+        2. Minor issues with Debian based systems which I don't want to get into
         '''
 
         chrootCMD = self._getSandboxCmd(command, asRoot)
@@ -1493,28 +1497,15 @@ class sessionManager():
                                 self.pidChild, chrootCMD)
 
         self._wrangleTTY()
-        #procCMD = 'nsenter --preserve-credentials --user --mount --pid -t'
-        #procCMD = procCMD + f' {self.pidChild} {chrootCMD}; exit $?;'
-        ## pylint: disable=locally-disabled, subprocess-popen-preexec-fn
-        #interactiveProc = subprocess.Popen(
-        #        procCMD,
-        #        stdin = self.stdoutS,
-        #        stdout = self.stdoutS,
-        #        stderr = self.stdoutS,
-        #        shell = True, universal_newlines = True, preexec_fn=os.setsid
-        #        )
-
+        procCMD = 'nsenter --preserve-credentials --user --mount --pid -t'
+        procCMD = procCMD + f' {self.pidChild} {chrootCMD}; exit $?;'
         # pylint: disable=locally-disabled, subprocess-popen-preexec-fn
-        procCMD = ['nsenter', '--preserve-credentials', '--user', '--mount',
-                   '--pid', '-t', str(self.pidChild), chrootCMD]
-
-        appLogger.debug('Running: %s', procCMD)
         interactiveProc = subprocess.Popen(
                 procCMD,
                 stdin = self.stdoutS,
                 stdout = self.stdoutS,
                 stderr = self.stdoutS,
-                preexec_fn=os.setsid
+                shell = True, universal_newlines = True, preexec_fn=os.setsid
                 )
 
         i=0
