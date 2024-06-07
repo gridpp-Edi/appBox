@@ -890,15 +890,21 @@ class sandboxFixes():
 
         for _ in ['user', 'root']:
             if _ == 'root':
-                asString = '-rar'
+                asString = '-rcr "${cmd}"'
                 scriptName = 'activate-asroot'
             else:
-                asString = '-ra'
+                asString = '-rc "${cmd}"'
                 scriptName = 'activate'
 
             activateScript = """#!/bin/bash
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
+if [ "$#" -eq 0 ]; then
+  cmd="/bin/bash"
+else
+  cmd="$*"
+fi
 
 /bin/env python3 ${SCRIPT_DIR}/appBox """
             activateScript = activateScript + cvmfsArgs
