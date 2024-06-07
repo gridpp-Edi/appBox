@@ -1268,11 +1268,10 @@ class sessionManager():
             #os.write(sys.stdin.fileno(), '\n\r'.encode())
             # Restore the stdin back to what it used to be
             #termios.tcsetattr(sys.stdin, termios.TCSANOW, self.oldTTY)
-            if self.proc and self.proc.pid:
+            if getattr(self, 'proc', None) and self.proc.pid:
                 os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
             sys.stdin.flush()
             sys.stdout.flush()
-            del self.proc
         except (IOError, OSError) as delErr:
             appLogger.debug('Deletion Error: %s', delErr)
 
