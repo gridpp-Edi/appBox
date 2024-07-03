@@ -1058,6 +1058,8 @@ class sandboxFixes:
             envs += 'export HOME=$( [ $(id -u) -eq 0 ] && echo "/root" ||'
             envs += f'echo "{_home}" )\n'
             envs += f'export HOSTNAME={socket.gethostname()}\n'
+            envs += 'export DISPLAY=:0\n'
+            envs += 'export WAYLAND_DISPLAY=wayland-0\n'
             envs += 'echo "\n Now Running \033[31m[\033[33ma\033[32mp'
             envs += '\033[36mp\033[32mB\033[36mo\033[34mx\033[m]\033[0m !\n"\n'
             envs += '/usr/sbin/ldconfig\n'
@@ -1644,10 +1646,6 @@ class sessionManager:
                 chrootCMD = chrootCMD + f'{self.getSandboxPath()} --propagation=unchanged '
                 chrootCMD = chrootCMD + f'{command};\' exit $?'
             else:
-                #chrootCMD = f'/bin/bash -c \'mount -t tmpfs tmpfs {self.getSandboxPath()}/run; '
-                #chrootCMD = chrootCMD + 'unshare -piUmf --mount --mount-proc -R '
-                #chrootCMD = chrootCMD + f'{self.getSandboxPath()} --propagation=unchanged '
-                #chrootCMD = chrootCMD + f'{command}'#'\' exit $?'
                 chrootCMD = f'unshare -piUmf --mount --mount-proc -R {self.getSandboxPath()} '
                 chrootCMD = chrootCMD + f'--propagation=unchanged {command}'
         else:
@@ -2091,7 +2089,7 @@ RH7>
 
         parser.add_argument('-online', action='store_true',
                             help='Always try to get the latest online version of an image.')
-        
+
         parser.add_argument('-layerCache',
                             help='Path to a directory to store the image layers for future use.')
 
@@ -2169,7 +2167,7 @@ def main():
     needToInstall = False
     addNV = not parsedArgs.remove_nvidia
     appLogger.debug('Add NV: %s', addNV)
-    
+
     forceUpdate = parsedArgs.online
     layerCache = parsedArgs.layerCache
     if layerCache:
