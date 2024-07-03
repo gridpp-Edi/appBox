@@ -31,6 +31,26 @@ AppBox solves these problems by proving an automated tool for setting up and sta
 This tool does not require additional packages to be installed on most modern Linux systems where user namespaces have been deployed.
 
 
+|                        | appBox | Apptainer | Docker | Podman |
+| ---------------------- | ------ | --------- | ------ | ------ |
+| Can run on Deb and EL systems   | ✅ | ✅ | ✅ | ✅ |
+| Can make Sandboxes              | ✅ | ✅ | ❌ | ❌ |
+| Easy to make Sandboxes          | ✅ | ❌ | ❌ | ❌ |
+| Easy to tar-up, copy and run elsewhere | ✅ | ❓(kind-of) | ❌ | ❌ |
+| User distributable?             | ✅ | ❓(kind-of) | ❌ (only dockerhub) | ❌ (only online) |
+| Works without User Network Namespaces | ✅ | ✅ | ❌ | ❌ (well... kinda) |
+| Supports activate/deactivate cmds like virtualenv/conda | ✅ | ❌ | ❌ | ❌ |
+| All changes (pip/yum install, vim, emacs) always persistent | ✅ | ❌ | ❌ | ❌ |
+| Can run as user/fakeroot w/o system changes | ✅ | ❓(kind-of) | ❌ | ❓(kind-of) |
+| Supports modifying EL&Debian sandboxes | ✅ | ❌ | ❌ | ❌ |
+| Tool for 'getting the job done' as a user | ✅ | ❓(kind-of) | ❌ | ❌ |
+| Only requires 'nsenter', 'unshare' & User Namespaces (root/admin level changes/configs) |  ✅ | ❌ | ❌ | ❌ |
+| Modifies the Sandbox/Image to work properly when launching | ✅ | ✅ | ✅ | ✅ |
+| Doesn't need to be installed by an admin to run | ✅ | ✅ | ❌ | ❌ |
+| Can it support GPUs? | ✅ | ✅ | ✅ | ✅ |
+| Can it support launching a service that listens on a port? | ✅ | ✅ | ✅ | ✅ |
+| Does it support caching Image layers? | ✅ | ✅ | ✅ | ✅ |
+
 # Usage:
 
 <pre> > ./appBox -ra
@@ -93,11 +113,10 @@ All without needing local root/admin access.
 
 ### Pulling from a GitLab instance
 
-<pre> > ./appBox -ii gitlab-registry.cern.ch/atlas-flavor-tagging-tools/training-images/ml-gpu/ml-gpu:latest -ip /scratch/sandboxATLAS -ra
+<pre> > ./appBox -ii gitlab-registry.cern.ch/linuxsupport/alma9-base -ip /scratch/sandboxAL9 -ra
 </pre>
 
-This will grab an image from the CERN Gitlab instance which is used for ATLAS ml-gpu work.
-This is just a demonstration of how to do this, I don't know what to do in this or why, but it exists for people to grab the sandbox from.
+This will grab an image from the CERN Gitlab instance which is used for AL9 support.
 
 # FAQs:
 
@@ -120,7 +139,8 @@ This will be modified in time to support either env vars or a direct user/pass c
 
 ## Support for quay.io
 
-Currently this tool does not look for and catch the 'no-redirect' on a quay.io repository. According to RHEL docs public support for this repo service doesn't issue tokens for downloads.
+Currently this tool does not look for and catch the 'no-redirect' on a quay.io repository.
+According to RHEL docs public support for this repo service doesn't issue tokens for downloads.
 
 ## Support for AMD GPU
 
@@ -134,11 +154,6 @@ Don't have one of these either. Again I plan to study how Apptainer does this an
 ## Support for Windows/MacOS
 
 Neither of these support containers directly. Both just launch a Linux VM and run containers in that. A Linux VM on either **will** work as expected.
-
-## Support for caching container layers
-
-Right now only complete sandboxes are captured/cached.
-With a bit of re-factoring the code can cache single layers from complex containers, but for now this has been decided to be 'enough for now'.
 
 For more info see FAQ.md
 

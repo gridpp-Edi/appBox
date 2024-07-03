@@ -30,9 +30,14 @@
 #
 
 import argparse
+import datetime
 import fcntl
+from functools import wraps
+import http.client
 import json
+import hashlib
 import logging
+import math
 import os
 import platform
 import pty
@@ -41,6 +46,7 @@ import re
 import select
 import shutil
 import signal
+import socket
 import stat
 import struct
 import subprocess
@@ -54,13 +60,27 @@ import urllib.request
 import urllib.error
 from urllib.parse import urlparse
 import uuid
-# Requests is made at the end for a PyLint reason I'm not sure of...
-import requests
+
+
+__version__ = '3.0.0'
+appBoxVersion = __version__
 
 
 # Global Logger
 appLogger = logging.getLogger('appBox')
-appBoxVersion = '2.2.0'
+barLogger = logging.getLogger('barLogger')
+
+
+class OneLineProgressHandler(logging.StreamHandler):
+    def emit(self, record):
+        """
+        Emit a record with carriage return to overwrite the current line.
+        """
+        message = self.format(record)
+        stream = self.stream
+        stream.write(f'\r{message}')  # Overwrite the current line
+        stream.flush()
+
 
 def getUN():
     '''
@@ -76,24 +96,198 @@ def getHome():
     return pwd.getpwuid(os.getuid())[5]
 
 
-class imageSource:
-    '''
-    Class to handle the source of the image
-    '''
+def findMountPath(path):
+    path = os.path.abspath(path)
+    while not os.path.ismount(path):
+        path = os.path.dirname(path)
+    return path
 
-    def __init__(self, defaultCacheDir=None):
-        '''
-        '''
-        self.proto = 'unknown'
-        if defaultCacheDir:
-            self.imageCacheDir = defaultCacheDir
+
+def printBar(iteration, total, prefix='', suffix='', length=50, fill='█'):
+    """
+    Call in a loop to create terminal progress bar
+    @params:
+        iteration   - Required  : current iteration (Int)
+        total       - Required  : total iterations (Int)
+        prefix      - Optional  : prefix string (Str)
+        suffix      - Optional  : suffix string (Str)
+        length      - Optional  : character length of bar (Int)
+        fill        - Optional  : bar fill character (Str)
+    """
+    if total<=0:
+        total = 1
+    percent = 100 * (iteration / float(total))
+    percent = f"{round(percent, 2)}"
+    filled_length = int(length * iteration // total)
+    barStr = fill * filled_length + '-' * (length - filled_length)
+    #if appLogger.level <= logging.INFO:
+    #barLogger.info(f'{prefix} |{bar}| {percent}% {suffix}')
+    barLogger.info('%s |%s| %s%% %s', prefix, barStr, percent, suffix)
+    # Print New Line on Complete
+    if iteration == total:
+        barLogger.info('\n')
+
+
+def bytesToHuman(num_bytes):
+    # Define size units
+    units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB']
+    size = num_bytes
+    unit_index = 0
+
+    # Loop to determine the appropriate unit
+    while size >= 1024 and unit_index < len(units) - 1:
+        size /= 1024.0
+        unit_index += 1
+
+    # Format the result to 2 decimal places
+    return f"{size:.2f} {units[unit_index]}"
+
+
+class downloadTokenAuthenticator:
+
+    def __init__(self, repoURL="https://example.com", imagePath="project/image"):
+        #
+        #
+        #
+        self.token = ""
+        self.repoURL = repoURL
+        self.imagePath = imagePath
+        self.tokenRequired = True
+        self.authRealm = ""
+        self.authService = ""
+        self.authScope = ""
+        self.manifestPath = f"/v2/{self.imagePath}/manifests/latest"
+        self.tokenExpiry = time.time() - 300  # Assume token is valid for 5min
+        #self.getNewToken()
+
+    def _getAuthnService(self):
+        #
+        #
+        appLogger.debug("1) Getting Authn Service: %s", self.repoURL)
+        parsedURL = urllib.parse.urlsplit(self.repoURL)
+        if (parsedURL.hostname is None) and (parsedURL.netloc is not None):
+            remoteHost = parsedURL.netloc
         else:
-            self.imageCacheDir = f'/tmp/appBox_{getUN()}'
+            remoteHost = parsedURL.hostname
+        appLogger.debug(parsedURL)
+        appLogger.debug("2) Getting Authn Service: %s", remoteHost)
+        conn = http.client.HTTPSConnection(remoteHost,
+                                           port=parsedURL.port if parsedURL.port else 443)
+        appLogger.debug("Querying Authn Service: %s", self.manifestPath)
+        conn.request("GET", self.manifestPath)
+        response = conn.getresponse()
+        if response.status == 401:
+            authHeader = response.getheader('www-authenticate')
+            appLogger.debug("Auth Header: %s", authHeader)
+            if authHeader:
+                match = re.match('[ \t]*([^ \t]+)[ \t]+realm="([^"]*)"', authHeader)
+                scheme, realm = match.groups()
+                if scheme.lower() != 'bearer':
+                    raise ConnectionError(
+                        f'Unknown Auth Scheme: "{scheme}" Returned by: "{self.repoURL}"')
 
-        # Cached tokens during this instance
-        self.token = {}
-        self.manifestCache = {}
-        self.layerCache = {}
+                match = re.match('.*service="([^"]*)"', authHeader)
+                service = match.groups()[0]
+                match = re.match('.*scope="([^"]*)"', authHeader)
+                scope = match.groups()[0]
+
+                self.authRealm = realm
+                self.authService = service
+                self.authScope = scope
+
+        elif response.status >=200 and response.status <= 299:
+            self.tokenRequired = False
+
+        elif response.status in [307, 308]:
+
+            raise ConnectionError(f'Redirected to: "{response.getheader("Location")}"')
+
+        return
+
+    def _getDownloadToken(self):
+
+        fullTokenURL = f'{self.authRealm}?service={self.authService}&scope={self.authScope}'
+        parsedURL = urllib.parse.urlsplit(fullTokenURL)
+
+        appLogger.debug('token: "%s", "%s"', fullTokenURL, parsedURL)
+        if (parsedURL.hostname is None) and (parsedURL.netloc is not None):
+            remoteHost = parsedURL.netloc
+        else:
+            remoteHost = parsedURL.hostname
+        appLogger.debug("3) Getting Authn Service: %s", remoteHost)
+        conn = http.client.HTTPSConnection(remoteHost,
+                                           port=parsedURL.port if parsedURL.port else 443)
+        appLogger.debug("Querying Authn Service: %s?%s", parsedURL.path, parsedURL.query)
+        conn.request("GET", parsedURL.path + '?' + parsedURL.query)
+        response = conn.getresponse()
+        tokenResponse = response.read()
+
+        #appLogger.debug("Querying Token: %s", fullTokenURL)
+        #tokenResponse = urllib.request.urlopen(urllib.request.Request(
+        #    fullTokenURL,
+        #)).read()
+        #appLogger.debug("Token Response: %s", tokenResponse)
+
+        self.token = json.loads(tokenResponse.decode())['token']
+
+        appLogger.debug("Token: %s",self.token)
+
+    def getNewToken(self):
+
+        if self.tokenRequired:
+            self._getAuthnService()
+            self._getDownloadToken()
+        else:
+            return
+
+    def isTokenValid(self):
+        return time.time() < self.tokenExpiry
+
+    def refreshToken(self):
+        if self.tokenRequired:
+            if not self.isTokenValid():
+                self.getNewToken()
+        else:
+            self.token = None
+
+        self.tokenExpiry = time.time() + 300
+
+
+class imageManager:
+
+    def __init__(self, imagePath="centos:7",
+                 installPath=None, layerCacheFolder=None, forceUpdate=False):
+
+        self.userPath = imagePath
+        self.imgHash = hashlib.sha256(imagePath.encode()).hexdigest()
+        if forceUpdate:
+            self.imgHash = 'forceUpdate'
+
+        appLogger.debug('Image Hash: %s', self.imgHash)
+
+        parsedImage = imageManager.parseImgString(imagePath)
+        appLogger.debug('Using image String: %s', imagePath)
+        appLogger.debug('Parsed Image: %s', parsedImage)
+        self.downloadService = parsedImage[0] + '://' + parsedImage[1]
+        self.imagePath = parsedImage[2]
+        self.imageTag = parsedImage[3]
+
+        userName = pwd.getpwuid(os.getuid())[0]
+        if layerCacheFolder is None:
+            self.layerCacheFolder = os.path.join(os.path.join('/tmp', 'appBox_'+userName),
+                                                 'layerCache')
+        else:
+            self.layerCacheFolder = layerCacheFolder
+
+        if not os.path.exists(self.layerCacheFolder):
+            os.makedirs(self.layerCacheFolder)
+
+        if installPath is None:
+            self.installPath = os.path.join(os.path.join('/scratch', 'appBox_'+userName), 'sandbox')
+        else:
+            self.installPath = installPath
+
+        self.authenticator = downloadTokenAuthenticator(self.downloadService, self.imagePath)
 
     @staticmethod
     def isUrl(candidate):
@@ -119,8 +313,8 @@ class imageSource:
         Method to parse strings for images, urls, dockerhub label:tags, etc... 
         '''
 
-        imgUrl = imageSource.isUrl(image)
-        imgLabel = imageSource.isLabel(image)
+        imgUrl = imageManager.isUrl(image)
+        imgLabel = imageManager.isLabel(image)
 
         if (not imgLabel) and (not imgUrl):
             raise ValueError(f'Image: "{image}" is not a valid image string')
@@ -167,138 +361,260 @@ class imageSource:
 
         return realScheme, realNetLoc, imageLabel, tag
 
+    @staticmethod
+    def tokenRequired(func):
+        @wraps(func)
+        def decorated_function(*args, **kwargs):
+            self = args[0]
+            self.authenticator.refreshToken()
+            return func(*args, **kwargs)
+        return decorated_function
 
-    def writeContainerInfo(self, _file, image, tag):
-        '''
-        Write some info about this sandbox to a file
-        '''
-        proto, netLoc, imageLabel, tag = self.parseImgString(image)
-        try:
-            manifests = self.manifestCache[imageLabel]
-            layerCache = self.layerCache[imageLabel]
-        except KeyError as keyErr:
-            _ = keyErr
-            manifests = {}
-            layerCache = {}
-        appBoxMetaData = { '__version__': appBoxVersion,
-                            'containerName': f'{proto}://{netLoc}/{imageLabel}:{tag}',
-                            'installedTime': f'{time.time()}',
-                            'manifests': manifests,
-                            'layers': layerCache,
-                         }
-        json.dump(appBoxMetaData, _file, ensure_ascii=True, indent=2)
+    @staticmethod
+    def getHeaders(token):
+        returnable = {
+                 "Accept":
+        "application/vnd.docker.distribution.manifest.v2+json,"+
+        "application/vnd.oci.image.manifest.v1+json," +
+        "application/vnd.oci.image.config.v1+json,"+
+        "application/vnd.docker.distribution.manifest.v1+prettyjws",
+                 "Authorization": f"Bearer {token}",
+                 "Content-Type": "application/json",
+                 "User-Agent": "curl/8.0.1",
+        }
+        if token is None:
+            del returnable['Authorization']
+        return returnable
 
-    def dumpContainerInfo(self, metaData):
-        '''
-        Dump the info about this sandbox to the log
-        '''
-        with open(metaData, 'r', encoding='utf-8') as _file:
-            appBoxData = json.loads(_file.read())
+    def getManifest(self, manifestVer=None):
 
-        appLogger.debug(appBoxData)
+        manCache = os.path.join(self.layerCacheFolder, self.imgHash)
 
-    def getArch(self):
-        '''
-        Get the architecture of the running system
-        '''
-        ## TODO add logic to determine correct string for each arch based on running system
-        return 'amd64'
+        if manifestVer is None:
+            manifestVer = self.imageTag
 
-    def getTokenURL(self, netLoc, image):
-        '''
-        Get the URL corresponding to get this token for this download
-        '''
-        logging.getLogger('requests').setLevel(logging.ERROR)
-        initialURL = f"{netLoc}/v2/{image}/manifests/latest"
-        dataz = requests.get(initialURL, timeout=5)
-        appLogger.debug('Request data: %s', dataz.headers)
-        found=False
-        for _h in dataz.headers:
-            if _h.lower() == 'www-authenticate':
-                found=True
-        if not found:
-            raise ConnectionError(f'No Auth Header Found: "{initialURL}"')
-        authzHeader = dataz.headers['Www-Authenticate']
-        match = re.match('[ \t]*([^ \t]+)[ \t]+realm="([^"]*)"', authzHeader)
-        scheme, realm = match.groups()
-        if scheme.lower() == 'bearer':
-            authURL = realm
+        contents = {}
+
+        if os.path.exists(manCache):
+            with open(manCache, 'r', encoding="utf-8") as _file:
+                contents = json.loads(_file.read())
+                appLogger.debug('Manifest Cache: %s', contents)
+
+            if manifestVer in contents:
+                return contents[manifestVer]
+            else:
+                remoteMan = self.getRemoteManifest(manifestVer)
+
         else:
-            raise ConnectionError(f'Unknown Auth Scheme: "{scheme}" Returned by: "{initialURL}"')
-        match = re.match('.*service="([^"]*)"', authzHeader)
+            remoteMan = self.getRemoteManifest(manifestVer)
 
-        serviceID = match.groups()[0]
+        contents[manifestVer] = remoteMan
 
-        authURL = f"{realm}?scope=repository:{image}:pull&service={serviceID}"
-        return authURL
+        with open(manCache, 'w', encoding="utf-8") as _file:
+            _file.write(json.dumps(contents))
 
-    def checkToken(self, netLoc, token, image):
-        '''
-        Method to be over-loaded, should we check the Token?
-        '''
-        _, _, _ = netLoc, token, image
-        return False
+        return contents[manifestVer]
 
-    def getToken(self, netLoc, image):
-        '''
-        Return either cached token, or request one be issued
-        '''
-        if image in self.token:
-            thisToken = self.token[image]
-            if self.checkToken(netLoc, thisToken, image):
-                return thisToken
+    @tokenRequired
+    def getRemoteManifest(self, manifestVer=None):
 
-        fullTokenURL = self.getTokenURL(netLoc, image)
+        if manifestVer is None:
+            manifestVer = self.imageTag
 
-        appLogger.debug("Querying Token: %s", fullTokenURL)
-        tokenResponse = urllib.request.urlopen(urllib.request.Request(
-            fullTokenURL,
-        )).read()
+        parsedURL = urlparse(self.downloadService)
+        manifestPath = f"/v2/{self.imagePath}/manifests/{manifestVer}"
 
-        token = json.loads(tokenResponse.decode())['token']
+        appLogger.debug("Connecting to Manifest Service: %s", parsedURL.netloc)
+        conn = http.client.HTTPSConnection(parsedURL.netloc)
 
-        self.token[image] = token
+        appLogger.debug("Querying Manifest Service: %s", manifestPath)
+        headers = imageManager.getHeaders(self.authenticator.token)
 
-        return self.token[image]
+        appLogger.debug("Headers: %s", headers)
+        conn.request("GET", manifestPath, headers=headers)
+
+        response = conn.getresponse()
+        thisResponse = response.read()
+        appLogger.debug("Manifest Response: %s", thisResponse)
+
+        return thisResponse.decode('utf-8')
+
+    @staticmethod
+    def checkDownloadIntegrity(downloadLocation, refShasum):
+
+        def compute_sha256(filepath):
+            sha256_hash = hashlib.sha256()
+            with open(filepath, "rb") as file:
+                # Read the file in chunks to handle large files
+                # Try reading with 16k blocks
+                # TODO add adjustments for block size on error
+                for byte_block in iter(lambda: file.read(16384), b""):
+                    sha256_hash.update(byte_block)
+                return sha256_hash.hexdigest()
+
+        def verify_file_sha256(filepath, reference_sha256):
+            computed_sha256 = compute_sha256(filepath)
+            if computed_sha256 == reference_sha256:
+                appLogger.debug("The file's SHA256 checksum matches the reference.")
+                return True
+            else:
+                appLogger.error("The file's SHA256 checksum does NOT match the reference.")
+                appLogger.error("Computed SHA256: %s", computed_sha256)
+                appLogger.error("Reference SHA256: %s", reference_sha256)
+                return False
+
+        return verify_file_sha256(downloadLocation, refShasum)
+
+    def getLayerFileName(self, digest):
+        return os.path.join(self.layerCacheFolder, f"{digest}.tar.gz")
+
+    @tokenRequired
+    def downloadLayers(self, digests, retry=True, retryCount=3, retryDelay=0):
+
+        i=0
+        for images in digests:
+            i+=1
+
+            appLogger.info('Downloading Layer: %s of %s', i, len(digests))
+            digest = images['digest']
+            retryNum = retryCount
+
+            success = False
+            skipped = False
+            outputFile = self.getLayerFileName(digest)
+            try:
+                if os.path.exists(outputFile):
+                    appLogger.info("Layer already downloaded: %s", outputFile)
+                    skipped = True
+                    continue
+                else:
+                    while retry and (retryNum > 0):
+                        try:
+                            appLogger.debug('Download Attempt: %s', retryNum)
+                            retryNum -= 1
+                            _ = self._downloadLayer(digest)
+                            success = True
+                            break
+                        except Exception as err: # pylint: disable=W0703
+                            appLogger.debug('Exception raised when downloading: %s', err)
+                            time.sleep(retryDelay)
+                            self.authenticator.refreshToken()
+                        except KeyboardInterrupt as err:
+                            appLogger.error('Download Cancelled by User')
+                            appLogger.debug('Exception raised when downloading: %s', err)
+                            return False
+            finally:
+                if not success:
+                    try:
+                        os.unlink(outputFile+'.tmp')
+                        os.unlink(outputFile)
+                    except FileNotFoundError:
+                        pass
+                else:
+                    appLogger.debug('Successfully Downloaded Layer: %s', digest)
+                    if not skipped:
+                        os.rename(outputFile+'.tmp', outputFile)
+        return True
 
 
-class dockerRepo(imageSource):
-    '''
-    Class for downloading docker-style container images/layers
-    '''
+    def _downloadLocation(self, host, port, path, query, outputFile, digestSha):
 
-    def __init__(self, defaultCacheDir=None, shouldCleanup=False):
+        conn = http.client.HTTPSConnection(host, port=port if port else 443)
+        appLogger.debug("Querying Authn Service: %s", path)
+        appLogger.debug("Query: %s", query)
 
-        imageSource.__init__(self, defaultCacheDir)
+        if 'X-Amz-SignedHeaders' in query:
+            appLogger.debug("Using AWS Signed Query for Auth'n")
+            conn.request("GET", path+'?'+query)
+        else:
+            appLogger.debug("Using Standard Headers for Auth'n")
+            conn.request("GET", path+'?'+query,
+                     headers=imageManager.getHeaders(self.authenticator.token))
+        response = conn.getresponse()
 
-        self._shouldCleanUp = bool(shouldCleanup)
+        contentLength = response.getheader('Content-Length')
+        if contentLength is not None:
+            contentLength = int(contentLength)
 
-        self.proto = 'https'
+        appLogger.info("Downloading Layer %s Size: %s", digestSha, bytesToHuman(contentLength))
 
-    def checkToken(self, netLoc, token, image):
-        '''
-        Just try to list the manifest and return based on the authenticated or not
-        '''
-        try:
-            _headers = self.getHeaders(token)
-            _, _, imageLabel, tag = imageSource.parseImgString(image)
-            _ = urllib.request.urlopen(urllib.request.Request(
-                    f"{netLoc}/v2/{imageLabel}/manifests/{tag}",
-                    headers = _headers,
-                )).read()
-            return True
-        except urllib.error.HTTPError as httpErr:
-            appLogger.debug(httpErr)
-            return False
+        if response.status == 200:
+            total=math.ceil(contentLength/4096)
+            # Initial call to print 0% progress
+            printBar(0, total, prefix = 'Downloading:', suffix = 'Complete', length = 50)
+            # Open the output file for writing
+            with open(outputFile, 'wb') as file:
+                # Read the response in blocks and write to the file
+                i=0
+                while True:
+                    block = response.read(4096)
+                    if not block:
+                        break
+                    file.write(block)
+                    i+=1
+                    printBar(i, total, prefix = 'Downloading:',
+                             suffix = 'Complete', length = 50)
+        else:
+            appLogger.debug("Failed to download layer: %s", response.read())
+            raise ConnectionError(f'Failed to download layer: "{response.status}"')
 
-    def getDigest(self, netLoc, manifest, image):
+        if not imageManager.checkDownloadIntegrity(outputFile, digestSha):
+            raise ConnectionError('Failed to download layer: "checksum failure"')
+
+
+
+    def _downloadLayer(self, digest):
+
+        digestSha = digest.split(':')[1]
+
+        outputFile = self.getLayerFileName(digest) + '.tmp'
+
+        imagePath = f"/v2/{self.imagePath}/blobs/{digest}"
+
+        appLogger.debug("Connecting to Download Service: %s",
+                        self.downloadService)
+        parsedURL = urllib.parse.urlsplit(self.downloadService)
+        conn = http.client.HTTPSConnection(parsedURL.hostname,
+                                           port=parsedURL.port if parsedURL.port else 443)
+        appLogger.debug("Querying Authn Service: %s", imagePath)
+
+        conn.request("GET", imagePath,
+                     headers=imageManager.getHeaders(self.authenticator.token))
+        response = conn.getresponse()
+
+        if response.status == 200:
+            self._downloadLocation(parsedURL.hostname, parsedURL.port,
+                                   imagePath, '', outputFile, digestSha)
+        elif response.status == 307:
+
+            appLogger.debug("Redirected to: %s", response.getheader("Location"))
+            relocated = response.getheader("Location")
+
+            appLogger.debug("Connecting to Download Service: %s", relocated)
+            parsedURL = urllib.parse.urlsplit(relocated)
+
+            self._downloadLocation(parsedURL.hostname, parsedURL.port,
+                                   parsedURL.path, parsedURL.query, outputFile, digestSha)
+
+        else:
+            raise ConnectionError(f'Failed to download layer: "{response.status}"')
+
+        return True
+
+    @staticmethod
+    def getArch():
+        if platform.machine().lower() in ['amd64', 'x86_64']:
+            return 'amd64'
+        elif platform.machine().lower() in ['aarch64', 'arm64']:
+            return 'arm64'
+
+    def getDigest(self, manifest):
         '''
         Get the digest for the layers in the manifest
         '''
 
-        appLogger.debug('Manifest: %s', manifest)
-
         digestList = []
+        thisConfig = ''
 
         ## '.fsLayers[]' | jq -r '.blobSum'
         ## Read the blobSum and return
@@ -307,9 +623,9 @@ class dockerRepo(imageSource):
         ## Read the digest from the layers and return
         appLogger.debug('Manifest: %s', manifest)
 
-        manifestCache = self.manifestCache.get(image, [])
-        manifestCache.append(manifest)
-        self.manifestCache[image] = manifestCache
+        if 'errors' in manifest:
+            errs = manifest['errors']
+            raise Exception('Error in Manifest: {errs}') # pylint: disable=W0719
 
         if 'layers' in manifest:
             for thisLayer in manifest['layers']:
@@ -320,251 +636,151 @@ class dockerRepo(imageSource):
                 digestList.append({'mediaType': 'application/vnd.docker.image.rootfs.diff.tar.gzip',
                                     'digest': thisLayer['blobSum']})
 
+        if 'config' in manifest:
+            thisConfig = manifest['config']['digest']
+
         ## '.manifest[0]' | jq -r '.digest'
         ## Read the manifest, get the correct digests and return
         elif 'manifests' in manifest:
             thisArch = self.getArch()
+            appLogger.debug('Detected System arch: %s', thisArch)
             for _manifest in manifest['manifests']:
                 if _manifest['platform']['architecture'] == thisArch:
                     thisCSum = _manifest['digest']
 
-                    token = self.getToken(netLoc, image)
-                    _headers = self.getHeaders(token, "application/vnd.oci.image.manifest.v1+json")
-
-                    manifestResponse = self.getManifests(netLoc, image, thisCSum, _headers)
-
-                    manifestJSON = json.loads(manifestResponse)
-
-                    digestList = self.getDigest(netLoc, manifestJSON, image)
-
-                    break
+                    imageManifest = self.getManifest(thisCSum)
+                    appLogger.debug('Image Manifest: %s', imageManifest)
+                    return self.getDigest(json.loads(imageManifest))
 
         #raise Exception('here')
-        return digestList
+        return digestList, thisConfig
 
-    def _assembleImage(self, imageLayers, outputImage):
-        '''
-        Perform the logic of 'assembling' the images into a single compressed image
-        '''
+    def getConfig(self):
 
-        appLogger.debug('Image Layers: %s', imageLayers)
+        imageManifest = self.getManifest()
+        _, digest = self.getDigest(json.loads(imageManifest))
 
-        tmpFolder = os.path.join(self.imageCacheDir, f'appBox_tmpFolder_{str(uuid.uuid4())[:8]}')
-        os.makedirs(tmpFolder)
+        appLogger.debug('Config: %s', digest)
 
-        for layer in imageLayers:
-            if layer['mediaType'] in ['application/vnd.docker.image.rootfs.diff.tar.gzip',
-                                      'application/vnd.oci.image.layer.v1.tar+gzip']:
-                ## TODO add a tarfile filter to catch (bad image) failing mknod errors
-                ## This should probably be done by a filter as
-                ## we 'care' about some errors we're silencing here
-                ## See Ubuntu:16.04 if you can still find it...
-                with tarfile.open(layer['cacheFile'], errorlevel=0) as _tfile:
-                    try:
-                        _tfile.extractall(tmpFolder, filter='tar')
-                    except TypeError:
-                        _tfile.extractall(tmpFolder)
+        _content = {}
 
-        current = stat.S_IMODE(os.lstat(tmpFolder).st_mode)
-        os.chmod(tmpFolder, current | stat.S_IWUSR | stat.S_IRUSR)
+        configPath = self.getLayerFileName(digest)[:-7]
 
-        for (root, dirs, files) in os.walk(tmpFolder, topdown=True):
-            for _dir in dirs:
-                thisPath = os.path.join(root,_dir)
-                if not os.path.islink(thisPath):
-                    current = stat.S_IMODE(os.lstat(thisPath).st_mode)
-                    os.chmod(thisPath, current | stat.S_IWUSR | stat.S_IRUSR)
-            for _file in files:
-                thisPath = os.path.join(root,_file)
-                if not os.path.islink(thisPath):
-                    current = stat.S_IMODE(os.lstat(thisPath).st_mode)
-                    os.chmod(os.path.join(root,_file), current | stat.S_IWUSR | stat.S_IRUSR)
+        if not os.path.exists(configPath):
+            self._downloadConfig(digest)
 
-        with tarfile.open(outputImage, "w|gz") as tar:
-            contents = os.listdir(tmpFolder)
-            for _obj in contents:
-                tar.add(os.path.join(tmpFolder,_obj), arcname=_obj)
+        with open(configPath, 'r', encoding="utf-8") as _file:
+            _content = json.loads(_file.read())
+            appLogger.debug('Config Content: %s', _content)
 
-        shutil.rmtree(tmpFolder)
+        appLogger.debug('Container ENV: %s', _content['config']['Env'])
 
-        return outputImage
+        return _content
 
-    def cacheImage(self, image, tag):
-        '''
-        This returns the path to the expected image cache
-        '''
-        imageCache = ''
-        for _ in image.split('/'):
-            imageCache = f'{imageCache}_{_}'
+    def _downloadConfig(self, digest):
 
-        return os.path.join(self.imageCacheDir, f'appBox{imageCache}_{tag}.compressed')
+        success = False
+        try:
+            self._downloadLayer(digest)
+            success = True
+        finally:
+            if not success:
+                try:
+                    os.unlink(self.getLayerFileName(digest)+'.tmp')
+                    os.unlink(self.getLayerFileName(digest))
+                except FileNotFoundError:
+                    pass
 
-    def getHeaders(self, token, accept="application/vnd.docker.distribution.manifest.v2+json"):
-        '''
-        Get thr headers to be used in the request
-        '''
-        return {"Accept": accept,
-                 "Authorization": f"Bearer {token}",
-                 "Content-Type": "application/json",
-                 "User-Agent": "curl/8.0.1",}
+        os.rename(self.getLayerFileName(digest)+'.tmp', self.getLayerFileName(digest)[:-7])
 
-    def getManifests(self, netLoc, image, tag, _headers):
-        '''
-        Get the manifest for this container
-        '''
-        appLogger.debug('Request Headers: %s', _headers)
-        appLogger.debug("Querying Manifest: %s/v2/%s/manifests/%s", netLoc, image, tag)
+    def downloadImage(self):
 
-        return urllib.request.urlopen(urllib.request.Request(
-            f"{netLoc}/v2/{image}/manifests/{tag}",
-            headers = _headers,
-        )).read()
+        imageManifest = self.getManifest()
 
-    def pullImage(self, image):
-        '''
-        Pull the requested image from a remote service
-        '''
-        realScheme, realNetLoc, imageLabel, tag = imageSource.parseImgString(image)
+        imageDigests, _ = self.getDigest(json.loads(imageManifest))
 
-        realNetLoc = realScheme + '://' + realNetLoc
+        self.getConfig()
 
-        outputImage = self.cacheImage(imageLabel, tag)
+        appLogger.debug('Image Digests: %s', imageDigests)
 
-        if os.path.isfile(outputImage):
-            appLogger.info('Output Image: "%s" found for image: "%s", tag: "%s"',
-                                        outputImage, imageLabel, tag)
-            return
+        if self.downloadLayers(imageDigests):
+            appLogger.debug('Returning Image Digests: %s', imageDigests)
+            return imageDigests
         else:
-            appLogger.info('Pulling Image for: %s:%s', imageLabel, tag)
+            return []
 
-        token = self.getToken(realNetLoc, imageLabel)
+    def extractImage(self, overridePath=None):
 
-        _headers = self.getHeaders(token)
+        installPath = overridePath if overridePath else self.installPath
 
-        appLogger.debug('Request Headers: %s', _headers)
-        appLogger.debug("Querying Image: %s/v2/%s/manifests/%s", realNetLoc, imageLabel, tag)
+        if os.path.exists(installPath):
+            appLogger.error("Install Path already exists: %s", installPath)
+            raise FileExistsError(f'Install Path already exists: "{installPath}"')
 
         try:
-            manifestResponse = self.getManifests(realNetLoc, imageLabel, tag, _headers)
-        except urllib.error.HTTPError as httpErr:
-            appLogger.error('Failed to get manifest for image: "%s", tag: "%s"', imageLabel, tag)
-            appLogger.error('Error: %s', httpErr)
+            return self._extractLayers(installPath)
+        except Exception as err: # pylint: disable=W0703
+            appLogger.error('Failed to extract layers: %s', err)
             if appLogger.level == logging.DEBUG:
-                raise httpErr
-            sys.exit(134)
+                raise
+            return 1
 
-        manifestJSON = json.loads(manifestResponse)
+    def _extractLayers(self, installPath):
 
-        thisDigestList = self.getDigest(realNetLoc, manifestJSON, imageLabel)
+        for layer in self.downloadImage():
 
-        def checkOutputLocation(outputDir):
-            if not os.path.exists(outputDir):
-                appLogger.debug('Creating output directory: %s', outputDir)
-                os.makedirs(outputDir)
+            layerFile = self.getLayerFileName(layer['digest'])
 
-        checkOutputLocation(self.imageCacheDir)
+            layerSize = os.path.getsize(layerFile)
+            appLogger.info('Opening Layer: %s (%s)', layerFile, bytesToHuman(layerSize))
 
-        imageLayers = []
+            with tarfile.open(layerFile, 'r:gz', errorlevel=1) as _tfile:
 
-        for thisDigest in thisDigestList:
+                total=0
+                for _entry in _tfile:
+                    total+=1
+                appLogger.info('#%s Files/Folders', total)
+                if total == 0:
+                    break
 
-            digestImage = ''
-            for _ in imageLabel.split('/'):
-                digestImage += _ + '_'
-            digestImage = digestImage[:-1]
-
-            outputCache = f'{thisDigest["digest"]}_{digestImage}_{tag}.digest'
-            outputCache = os.path.join(self.imageCacheDir, outputCache)
-            imageLayers.append({'mediaType': thisDigest['mediaType'],
-                                 'cacheFile': outputCache,
-                                 'digest': thisDigest['digest']})
-
-            appLogger.debug('Downloading Layer: %s', thisDigest['digest'])
-            blobPath = f"{realNetLoc}/v2/{imageLabel}/blobs/{thisDigest['digest']}"
-
-            labelCache = self.layerCache.get(imageLabel, [])
-            labelCache.append(thisDigest['digest'])
-            self.layerCache[imageLabel] = labelCache
-
-            # Used to be used with urlopen which has... issues...
-            #this_request = urllib.request.Request(blob_path, headers = _headers)
-            with requests.get(blobPath, headers=_headers, stream=True, timeout=5) as requestData:
-                requestData.raise_for_status()
-                with open(outputCache, 'wb+') as _file:
-                    for chunk in requestData.iter_content(chunk_size=32*1024):
-                        _file.write(chunk)
-
-        assembledImage = self._assembleImage(imageLayers, outputImage)
-
-        appLogger.info('Image assembled at: %s', assembledImage)
-
-        #def cleanUp(to_be_removed):
-        #    ## Loop through and unlink un-needed layer and compressed layer versions
-        #    while _file in to_be_removed:
-        #        os.unlink(_file)
-
-        #if self._shouldCleanUp:
-        #    for _layer in image_layers:
-        #        os.unlink(_layer['cacheFile'])
-
-    def buildSandbox(self, image, dest):
-        '''
-        Build the sandbox from the image.
-        Aka, extract the compressed image to the destination.
-        '''
-
-        appBoxFile = os.path.join(dest, '._appBoxContainer')
-
-        realScheme, realNetloc, imageLabel, tag = imageSource.parseImgString(image)
-        _, _  = realScheme, realNetloc
-        appLogger.debug('Image: "%s"', imageLabel)
-        thisImage = self.cacheImage(imageLabel, tag)
-
-        appLogger.debug("Looking for Stored image at: %s", thisImage)
-
-        if not os.path.exists(thisImage):
-            appLogger.error('Expected to find (cached) image at: "%s",', thisImage)
-            appLogger.error('for image: "%s", tag: "%s".', image, tag)
-            appLogger.error('Did you forget to pull first?')
-            return False
-
-        if not os.path.exists(dest):
-            os.makedirs(dest)
-        else:
-            if os.path.exists(appBoxFile):
-                appLogger.info('Found appBox sandbox at: %s', dest)
-
-                # TODO add integrity checking for sandbox
-
-                self.dumpContainerInfo(appBoxFile)
-                return False
-
-        appLogger.info('Extracting Compressed Image.')
-        appLogger.debug('Image: "%s", Dest: "%s"', thisImage, dest)
-        with tarfile.open(thisImage) as _tfile:
-            try:
-                _tfile.extractall(dest, filter='fully_trusted')
-            except TypeError:
-                _tfile.extractall(dest)
-
-        appLogger.info('Writing metaData.')
-        with open(appBoxFile, 'w+', encoding='utf-8') as _file:
-            self.writeContainerInfo(_file, image, tag)
+                printBar(0, total, prefix = 'Extracting:', suffix = 'Complete', length = 50)
+                i=0
+                for _entry in _tfile:
+                    i+=1
+                    printBar(i, total, prefix = 'Extracting:', suffix = 'Complete', length = 50)
+                    #total=len(_tfile.getmembers())
+                    #if i%100 == 0:
+                    #    appLogger.debug('Extracting: %s/%s', i, total)
+                    #i+=1
+                    #appLogger.debug('Extracting: {}'.format(_entry.name))
+                    if _entry.isdir():
+                        os.makedirs(os.path.join(installPath, _entry.name), exist_ok=True)
+                    elif _entry.issym() or _entry.islnk():
+                        _tfile.extract(_entry, path=installPath)
+                    else:
+                        if os.path.exists(os.path.join(installPath, _entry.name)):
+                            os.remove(os.path.join(installPath, _entry.name))
+                        parent = os.path.dirname(os.path.join(installPath, _entry.name))
+                        os.makedirs(os.path.join(installPath, parent), exist_ok=True)
+                        current = stat.S_IMODE(os.lstat(parent).st_mode)
+                        os.chmod(parent, current | stat.S_IWUSR | stat.S_IRUSR | stat.S_ISGID)
+                        _tfile.extract(_entry, path=installPath, filter='data')
 
         return 0
 
 
-class sandboxFixes():
+class sandboxFixes:
     '''
     Class to handle the fixes needed for the sandbox
     '''
 
-    def __init__(self, addNV, sandboxInstance):
+    def __init__(self, addNV, sandboxInstance, iManager):
         '''
         '''
 
         self.addNVidia = addNV
         self.sandboxInstance = sandboxInstance
+        self.iManager = iManager
 
         self.tmpPath = '/tmp'
 
@@ -574,6 +790,7 @@ class sandboxFixes():
         '''
         self.fixFilePermissions()
         self.fixAptSandboxing()
+        self.fixDnfSandboxing()
         self.fixMissingPaths()
         self.fixMissingStubs()
         self.fixUserAccounts()
@@ -582,6 +799,8 @@ class sandboxFixes():
         self.installAppBox()
         self.copyFromHost()
         self.fixForLies()
+        self.applyImageEnv()
+        self.stampSandbox()
 
     def copyFromHost(self):
         '''
@@ -705,6 +924,7 @@ class sandboxFixes():
 
         with open(tmpPasswdFile, 'r', encoding='utf-8') as _file:
             _content = _file.read()
+            appLogger.debug('File: "%s"', tmpPasswdFile)
             appLogger.debug('Content: "%s"', _content)
 
         newContent = 'root:x:0:0:root:/root:/bin/bash\n'
@@ -740,6 +960,7 @@ class sandboxFixes():
 
         with open(tmpGroupFile, 'r', encoding='utf-8') as _file:
             _content = _file.read()
+            appLogger.debug('File: "%s"', tmpGroupFile)
             appLogger.debug('Content: "%s"', _content)
 
         _, aGID = self.getAnonUIDGID()
@@ -772,6 +993,7 @@ class sandboxFixes():
         self.sandboxInstance.copyFileToHost('/etc/gshadow', tmpShadowFile)
         with open(tmpShadowFile, 'r', encoding='utf-8') as _file:
             _content = _file.read()
+            appLogger.debug('File: "%s"', tmpShadowFile)
             appLogger.debug('Content: "%s"', _content)
 
         newContent = ''
@@ -829,7 +1051,16 @@ class sandboxFixes():
                 os.path.join(self.sandboxInstance.getSandboxPath(), './etc/ld.so.conf.d/wsl.conf'))
 
         def setEnvVar(tmpENVFile):
-            envs = 'export DEBIAN_FRONTEND="noninteractive"\n'
+
+            _home = getHome()
+            envs  = 'export DEBIAN_FRONTEND="noninteractive"\n'
+            envs += 'export TERM=xterm-256color\n'
+            envs += 'export HOME=$( [ $(id -u) -eq 0 ] && echo "/root" ||'
+            envs += f'echo "{_home}" )\n'
+            envs += f'export HOSTNAME={socket.gethostname()}\n'
+            envs += 'echo "\n Now Running \033[31m[\033[33ma\033[32mp'
+            envs += '\033[36mp\033[32mB\033[36mo\033[34mx\033[m]\033[0m !\n"\n'
+            envs += '/usr/sbin/ldconfig\n'
             with open(tmpENVFile, 'w+', encoding='utf-8') as _file:
                 _file.write(envs)
             self.sandboxInstance.copyFileFromHost(tmpENVFile,
@@ -872,6 +1103,33 @@ class sandboxFixes():
             shutil.copyfile(os.path.join(self.sandboxInstance.getSandboxPath(), 'bin/true'),
                     os.path.join(self.sandboxInstance.getSandboxPath(), 'bin/dpkg-statoverride'))
 
+    def fixDnfSandboxing(self):
+        '''
+        Fix issues with Fedora sandboxing since we're now in a competition to do this...
+        '''
+
+        appConfPath = os.path.join(self.sandboxInstance.getSandboxPath(), './etc/dnf/')
+        self.sandboxInstance.createSandboxPath(appConfPath)
+
+        layerPath = os.path.join(self.sandboxInstance.sandboxPath, './etc/dnf/')
+        if os.path.exists(layerPath):
+            # Only want to apply this 'fix' in sandboxes where apt is installed
+
+            fixDNF  = '[main]\n'
+            fixDNF += 'gpgcheck=True\n'
+            fixDNF += 'installonly_limit=3\n'
+            fixDNF += 'clean_requirements_on_remove=True\n'
+            fixDNF += 'best=False\n'
+            fixDNF += 'skip_if_unavailable=True\n'
+            fixDNF += 'tsflags=nodocs\n'
+            fixDNF += 'excludepkgs=rpm-plugin-ima,ima-evm-utils\n' # <- the main fix(!)
+
+            tmpSandbox = os.path.join(self.tmpPath, f'dnf.conf_{str(uuid.uuid4())[:8]}')
+            with open(tmpSandbox, 'w+', encoding='utf-8') as _file:
+                _file.write(fixDNF)
+
+            self.sandboxInstance.copyFileFromHost(tmpSandbox, os.path.join(appConfPath, 'dnf.conf'))
+
     def installAppBox(self):
         '''
         Install the appBox tool into the sandbox
@@ -901,7 +1159,7 @@ class sandboxFixes():
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 if [ "$#" -eq 0 ]; then
-  cmd="/bin/bash"
+  cmd="env -i /bin/bash --rcfile /etc/profile -li"
 else
   cmd="$*"
 fi
@@ -938,8 +1196,40 @@ fi
                             os.path.join(self.sandboxInstance.getSandboxPath(), 'bin/true'),
                             os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_file))
 
+    def applyImageEnv(self):
 
-class sessionManager():
+        thisConfig = self.iManager.getConfig()
+
+        all_envs = ""
+        for _env in thisConfig['config']['Env']:
+
+            appLogger.debug('Setting Environment %s', _env)
+            k, v = _env.split('=')
+            all_envs += f"export {k}=\"{v}\"\n"
+
+        tmpENVFile = os.path.join(self.tmpPath, f'env.sh_{str(uuid.uuid4())[:8]}')
+        with open(tmpENVFile, 'w+', encoding='utf-8') as _file:
+            _file.write(all_envs)
+        self.sandboxInstance.copyFileFromHost(tmpENVFile,
+                os.path.join(self.sandboxInstance.getSandboxPath(), './etc/profile.d/imageEnv.sh'))
+
+    def stampSandbox(self):
+
+        stampFile = os.path.join(self.sandboxInstance.getSandboxPath(), '.appBox')
+
+        appBoxData = {}
+        appBoxData['version'] = appBoxVersion
+        appBoxData['image'] = self.iManager.userPath
+        appBoxData['createTime'] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        appBoxData['originalSandboxPath'] = self.sandboxInstance.getSandboxPath()
+        appBoxData['originalUser'] = getUN()
+        appBoxData['originalUIDGID'] = f"{os.getuid()}:{os.getgid()}"
+
+
+        with open(stampFile, 'w', encoding='utf-8') as _file:
+            _file.write(json.dumps(appBoxData, indent=4))
+
+class sessionManager:
     '''
     Class for managing interactive sandbox sessions
     '''
@@ -1171,6 +1461,7 @@ class sessionManager():
         appLogger.debug('Querying ID: %s', childPIDPath)
         with open(childPIDPath, 'r', encoding='utf-8') as _file:
             _content = _file.read()
+            appLogger.debug('File: "%s"', childPIDPath)
             appLogger.debug('Content: "%s"', _content)
             childPid = int(_content)
             appLogger.debug('PID: %s', childPid)
@@ -1181,9 +1472,17 @@ class sessionManager():
         '''
         This is a list of directories to be mounted into the sandbox from the host
         '''
+        _home = getHome()
+        homeMount = findMountPath(_home)
+
         mounts = ['/afs', '/home', '/tmp', '/dev', '/cvmfs',
                   '/scratch', '/Data', '/localdisk', '/sys', '/mnt',
                   '/mnt/wsl', '/mnt/wslg']
+        if _home not in mounts:
+            mounts += [_home,]
+        if homeMount != '/' and (homeMount not in mounts):
+            mounts += [homeMount,]
+        appLogger.debug('SharePaths: %s', mounts)
         if self.addNVidia:
             mounts += ['/usr/lib/wsl', '/usr/bin/nvidia-smi', '/usr/bin/nvidia-modprobe']
         return mounts
@@ -1203,7 +1502,10 @@ class sessionManager():
                 continue
 
             appLogger.debug('Bind Mounting: %s as: %s', hostPath, sandboxPath)
-            self.createSandboxPath(sandboxPath, overridePID)
+            if os.path.isdir(hostPath):
+                self.createSandboxPath(sandboxPath, overridePID)
+            else:
+                self.createSandboxEmptyFile(sandboxPath)
 
             pidSpace = self.pidChild
             mountOpts = '--rbind --make-rslave'
@@ -1320,18 +1622,18 @@ class sessionManager():
             else:
                 commandPath = os.path.join(self.sandboxPath, 'bin/bash')
             if os.path.exists(commandPath):
-                command = '/bin/bash -l'
+                command = 'env -i /bin/bash --rcfile /etc/profile -l'
             else:
-                command = '/bin/sh'
+                command = 'env -i /bin/sh'
         else:
             if not self.compatV1:
                 commandPath = os.path.join(self.sandboxPath, 'bin/bash')
                 if os.path.exists(commandPath):
-                    command = f'/bin/bash -c "sleep 1; {command}"'
+                    command = f'env -i /bin/bash --rcfile /etc/profile -c "sleep 1; {command}"'
                 else:
                     pass
             else:
-                command = f'/bin/bash -c \'sleep 1; {command}\''
+                command = f'env -i /bin/bash --rcfile /etc/profile -c \'sleep 1; {command}\''
         #command = '/bin/bash -l'
 
         if not self.compatV1:
@@ -1342,10 +1644,10 @@ class sessionManager():
                 chrootCMD = chrootCMD + f'{self.getSandboxPath()} --propagation=unchanged '
                 chrootCMD = chrootCMD + f'{command};\' exit $?'
             else:
-                chrootCMD = f'/bin/bash -c \'mount -t tmpfs tmpfs {self.getSandboxPath()}/run; '
-                chrootCMD = chrootCMD + 'unshare -piUmf --mount --mount-proc -R '
-                chrootCMD = chrootCMD + f'{self.getSandboxPath()} --propagation=unchanged '
-                chrootCMD = chrootCMD + f'{command}'#'\' exit $?'
+                #chrootCMD = f'/bin/bash -c \'mount -t tmpfs tmpfs {self.getSandboxPath()}/run; '
+                #chrootCMD = chrootCMD + 'unshare -piUmf --mount --mount-proc -R '
+                #chrootCMD = chrootCMD + f'{self.getSandboxPath()} --propagation=unchanged '
+                #chrootCMD = chrootCMD + f'{command}'#'\' exit $?'
                 chrootCMD = f'unshare -piUmf --mount --mount-proc -R {self.getSandboxPath()} '
                 chrootCMD = chrootCMD + f'--propagation=unchanged {command}'
         else:
@@ -1366,10 +1668,10 @@ class sessionManager():
                 appLogger.warning('if dropping into a \'non-root\' sandbox.')
                 appLogger.warning('Running as "root" in sandbox')
 
-            chrootCMD = f'chroot {self.getSandboxPath()} /bin/bash -c'
-            chrootCMD = chrootCMD + 'export PATH=/bin:/sbin:/usr/sbin:/usr/bin:$PATH;'
-            chrootCMD = chrootCMD + '/bin/mount -t tmpfs tmpfs /run;'
-            chrootCMD = chrootCMD + f'/bin/mount -t proc proc /proc; {command}"; exit $?'
+            chrootCMD = ' /bin/bash -c '
+            chrootCMD +='"export PATH=/bin:/sbin:/usr/sbin:/usr/bin:/usr/local/bin:/usr/local/sbin;'
+            chrootCMD += '/bin/mount -t tmpfs tmpfs /run;'
+            chrootCMD += f'/bin/mount -t proc proc /proc; sleep 300; {command}"; exit $?'
 
         return chrootCMD
 
@@ -1435,7 +1737,10 @@ class sessionManager():
 
         # Set up signal handler for window resize
         signal.signal(signal.SIGWINCH, self.handle_sigwinch)
-        self.handle_sigwinch(None, None)  # Set initial window size
+        try:
+            self.handle_sigwinch(None, None)  # Set initial window size
+        except OSError as err:
+            appLogger.debug('Error: %s', err)
 
         chrootCMD = self._getSandboxCmd(command, asRoot)
 
@@ -1623,7 +1928,7 @@ class sessionManager():
             return False
 
 
-class appBoxManager():
+class appBoxManager:
     '''
     Class for general helper functions
     '''
@@ -1633,14 +1938,27 @@ class appBoxManager():
         Set the log level of the global logger
         '''
 
-        if level != logging.INFO:
-            logging.basicConfig(level=level, format='%(levelname)s: %(message)s')
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(level)
+        if level == logging.DEBUG:
+            console_formatter = logging.Formatter(
+                "%(asctime)s;%(levelname)s: %(message)s", "%Y-%m-%d %H:%M:%S")
         else:
-            logging.basicConfig(format='%(message)s')
+            console_formatter = logging.Formatter('%(message)s')
+        console_handler.setFormatter(console_formatter)
         appLogger.setLevel(level)
+        appLogger.addHandler(console_handler)
         for handler in appLogger.handlers:
             handler.setLevel(level)
 
+        # Set up logging with the custom handler
+        handler = OneLineProgressHandler(sys.stdout)
+        formatter = logging.Formatter('%(message)s')  # Simple message output
+        handler.setFormatter(formatter)
+        barLogger.setLevel(level)
+        barLogger.addHandler(handler)  # Replace default handlers with our custom handler
+        for handler in barLogger.handlers:
+            handler.setLevel(level)
 
 
 class cmdLineParser:
@@ -1765,11 +2083,17 @@ RH7>
         parser.add_argument('-compat', '--compatV1', action='store_true',
             help='Use the older compatibility mode for the sandbox. Allows a CO8 host.')
 
-        parser.add_argument('-addNV', '--add-nvidia', action='store_true',
-                            help='Add the nvidia-smi binary to the sandbox.')
+        parser.add_argument('-rmNV', '--remove-nvidia', action='store_true',
+                            help='Remove the nvidia-smi binary to the sandbox.')
 
         parser.add_argument('-tmp', action='store_true',
                             help='The environment will be destroyed on exit. (Temporary Sandbox)')
+
+        parser.add_argument('-online', action='store_true',
+                            help='Always try to get the latest online version of an image.')
+        
+        parser.add_argument('-layerCache',
+                            help='Path to a directory to store the image layers for future use.')
 
         # Disabling the cvmfs tooling for now as it's not production ready/tested yet.
         #parser.add_argument('-cvmfs', '--use-cvmfs',
@@ -1778,10 +2102,13 @@ RH7>
         return parser
 
 
-def runCommand(sandboxPath, command, asRoot, compatV1=False, addNV=False, rootfs=None, runCMD=True):
+def runCommand(iManager, sandboxPath, command, asRoot,
+               compatV1=False, addNV=False, rootfs=None, runCMD=True):
     '''
     Run a command within a sandbox
     '''
+
+    appLogger.debug('RunCommand: %s, %s, %s, %s', compatV1, addNV, rootfs, runCMD)
 
     try:
         thisSandbox = sessionManager(sandboxPath, compatV1, addNV, rootfs)
@@ -1793,7 +2120,7 @@ def runCommand(sandboxPath, command, asRoot, compatV1=False, addNV=False, rootfs
 
         thisSandbox.mountHost()
 
-        theseFixes = sandboxFixes(addNV, thisSandbox)
+        theseFixes = sandboxFixes(addNV, thisSandbox, iManager)
         theseFixes.applyAllFixes()
 
         if runCMD:
@@ -1840,7 +2167,15 @@ def main():
     wantedDest = None
     shouldRun = False
     needToInstall = False
-    addNV = parsedArgs.add_nvidia
+    addNV = not parsedArgs.remove_nvidia
+    appLogger.debug('Add NV: %s', addNV)
+    
+    forceUpdate = parsedArgs.online
+    layerCache = parsedArgs.layerCache
+    if layerCache:
+        layerCache = os.path.abspath(layerCache)
+    else:
+        layerCache = None
 
     lowerLayer = None
 
@@ -1849,7 +2184,7 @@ def main():
 
     wantedImage = parsedArgs.install_image
     if parsedArgs.install_path:
-        wantedDest = parsedArgs.install_path
+        wantedDest = os.path.abspath(parsedArgs.install_path)
         needToInstall = True
 
     if parsedArgs.run_command:
@@ -1930,26 +2265,29 @@ def main():
         ## This will probably involve adding additional classes for Quay, Singularity, etc.
         ## Can safely default to assume most users just want a docker image
 
-        # Construct Manager
-        imageManager = dockerRepo()
 
         imageLower = wantedImage.lower()
         if wantedImage != imageLower:
             appLogger.debug('Changing search string to be lower-case! %s', imageLower)
             wantedImage = imageLower
 
-        appLogger.debug('Looking for image: "%s"', wantedImage)
+        # Construct Manager
+        iManager = imageManager(wantedImage, wantedDest, layerCache, forceUpdate)
 
-        # Pull the image from the source to a temp folder
-        imageManager.pullImage(wantedImage)
+        appLogger.debug('Looking for image: "%s"', wantedImage)
 
         # Extract the image to the destination path
         try:
-            rc = imageManager.buildSandbox(wantedImage, wantedDest)
+            if os.path.exists(wantedDest):
+                appLogger.info('Path: "%s" already exists. Assuming it\'s a sandbox.', wantedDest)
+                rc = 0
+            else:
+                rc = iManager.extractImage()
             if rc != 0:
                 return rc
             runCMD=False
-            rc = runCommand(wantedDest, commandToRun, asRoot, compatV1, addNV, lowerLayer, runCMD)
+            rc = runCommand(iManager, wantedDest, commandToRun, asRoot, compatV1,
+                            addNV, lowerLayer, runCMD)
             if rc != 0:
                 return rc
 
@@ -1961,11 +2299,24 @@ def main():
                 raise permissionErr
             sys.exit(133)
 
-
     if shouldRun:
 
+        try:
+            with open(os.path.join(wantedDest, '.appBox'), 'r', encoding='utf-8') as _file:
+                _content = _file.read()
+        except FileNotFoundError as fileErr:
+            _ = fileErr
+            appLogger.error('Path: "%s" is not a valid appBox sandbox.', wantedDest)
+            sys.exit(142)
+
+        imageData = json.loads(_content)
+        appLogger.debug('Sandbox Data: %s', imageData)
+
+        iManager = imageManager(imageData['image'], wantedDest, layerCache, forceUpdate)
+
         # We now plan to run a command or launch a shell
-        rc = runCommand(wantedDest, commandToRun, asRoot, compatV1, addNV, lowerLayer)
+        rc = runCommand(iManager, wantedDest, commandToRun, asRoot, compatV1,
+                        addNV, lowerLayer)
         if parsedArgs.tmp:
             shutil.rmtree(wantedDest)
         return rc
