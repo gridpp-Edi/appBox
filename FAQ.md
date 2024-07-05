@@ -9,6 +9,48 @@ Yes this tool isn't perfect. Yes this tool does lots of things “wrong”. But 
 
 (*obviously without namespaces we're dead on the water, but then we're doing computing asif it's the late 90s again ;) )
 
+## What was different in Version 0?
+
+Version0 was a very much _'proof of concept'_ tool.
+The idea was to build a wrapper for Apptainer/Singularity to allow me to work quicker/faster with a sandbox based on a container.
+This worked well(ish). I hit a bunch of common problems with Debian and custom distros and this encouraged me to investigate a bunch of the 'sandbox fixes' that are needed.
+It also made me realise (and be thankful for) the mangling that Docker/Podman/Runc do when launching a container image to make everything work.
+This was kinda based on a bunch of experiences and frustrations with all of these systems.
+I think this had another name, but I forget what it was, it wasn't even in git.
+This version was mix of bash templates and python tooling, this is never a good idea even for prototyping :P
+
+## What was different in Version 1?
+
+Version was built to make a bunch of changes and to control entering/leaving the container using nsenter and such.
+This was kinda of a weird mix of tools and was good for exploring what can be done and helped me understand some things.
+This version wasn't driven by a strong philosophy, however, it was capable of doing some interesting things such as control apptainer container/instances after they had launched.
+This version I think was also pre-git.
+Here was probably the first 'pure-python' solution.
+
+## What was different in Version 2?
+
+Well version2 was driven by a bet from someone. 'Can't you just make it work without Apptainer?'.
+And well, ego says yes. This was the first version to use only unshare for launching sandbox environments.
+This version made some design philosophy changes which I wasn't happy with, but were pragmatic. (Use of an external python library for instance)
+This version was the first 'pure-python' approach to solving this problem.
+
+## What is different in Version 3?
+
+This version has a re-write of the Image handling layers. This is much cleaner. I've learned a bunch of things about stuff I didn't know and had fun, but this version is kind-of of what I wanted version2 to be, but version2 differed so strongly from version1 that I didn't want to continue without getting everything back to a working state.
+The older 'compat' stuff is probably broken here...
+
+## Version4?
+
+I want to explore supporting image layers.
+I want to understand how using fuser-layers can support building a sandbox-like env backed by a r/o container, compressed container, and/or CVMFS(!).
+(I suspect there is already a CVMFS project to do this and probably in a better way.)
+
+## Future plans?
+
+Explore how sandbox nesting is handled in Apptainer or equivalent with time and emulate this, but there's only so many hours in the day
+Clean-up support for multiple different versions of unshare more cleanly.
+Add more control over building the environment when dropping into a sandbox.
+
 ## What does this do?
 
 This tool installs a “permanent” but mutable sandbox environment for a userspace command to execute pseudo privileged commands within a containerised kernel namespaces. 
