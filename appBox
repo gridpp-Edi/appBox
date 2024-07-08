@@ -765,7 +765,10 @@ class imageManager:
                         if not (_entry.issym() or _entry.islnk()):
                             current = stat.S_IMODE(os.lstat(parent).st_mode)
                             os.chmod(parent, current | stat.S_IWUSR | stat.S_IRUSR | stat.S_ISGID)
-                        _tfile.extract(_entry, path=installPath, filter='fully_trusted')
+                        try:
+                            _tfile.extract(_entry, path=installPath, filter='fully_trusted')
+                        except TypeError:
+                            _tfile.extract(_entry, path=installPath)
                         if not (_entry.issym() or _entry.islnk()):
                             output = os.path.join(installPath, _entry.name)
                             current = stat.S_IMODE(os.lstat(output).st_mode)
@@ -1031,7 +1034,7 @@ class sandboxFixes:
         def fixDeactivate():
             tmpDeacScript = os.path.join(self.tmpPath, f'deactivate_{str(uuid.uuid4())[:8]}')
             with open(tmpDeacScript, 'w+', encoding='utf-8') as _file:
-                _file.write('#!/bin/bash\nkill -s 1 1\n')
+                _file.write('#!/bin/bash\nfor i in $(seq 10); do kill -s 1 ${i} 2>&1 | true ; done\n')
             st = os.stat(tmpDeacScript)
             os.chmod(tmpDeacScript, st.st_mode | stat.S_IEXEC)
 
@@ -1171,7 +1174,7 @@ class sandboxFixes:
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 if [ "$#" -eq 0 ]; then
-  cmd="env -i /bin/bash --rcfile /etc/profile -li"
+  cmd="env -i /bin/bash --rcfile /etc/profile -l"
 else
   cmd="$*"
 fi
@@ -1634,14 +1637,14 @@ class sessionManager:
             else:
                 commandPath = os.path.join(self.sandboxPath, 'bin/bash')
             if os.path.exists(commandPath):
-                command = 'env -i /bin/bash --rcfile /etc/profile -l'
+                command = 'env -i /bin/bash --rcfile /etc/profile -c "sleep 1; env -i /bin/bash --rcfile /etc/profile -l; exit $?"'
             else:
                 command = 'env -i /bin/sh'
         else:
             if not self.compatV1:
                 commandPath = os.path.join(self.sandboxPath, 'bin/bash')
                 if os.path.exists(commandPath):
-                    command = f'env -i /bin/bash --rcfile /etc/profile -c "sleep 1; {command}"'
+                    command = f'env -i /bin/bash --rcfile /etc/profile -c "sleep 1; {command}" '
                 else:
                     pass
             else:
