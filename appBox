@@ -1682,7 +1682,8 @@ class sessionManager:
             chrootCMD = ' /bin/bash -c '
             chrootCMD +='"export PATH=/bin:/sbin:/usr/sbin:/usr/bin:/usr/local/bin:/usr/local/sbin;'
             chrootCMD += '/bin/mount -t tmpfs tmpfs /run;'
-            chrootCMD += f'/bin/mount -t proc proc /proc; sleep 300; {command}"; exit $?'
+            chrootCMD += f'/bin/mount -t proc proc /proc; sleep 1; chroot {self.getSandboxPath()} '
+            chrootCMD += f'{command}"; exit $?'
 
         return chrootCMD
 
