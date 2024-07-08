@@ -1035,11 +1035,13 @@ class sandboxFixes:
             tmpDeacScript = os.path.join(self.tmpPath, f'deactivate_{str(uuid.uuid4())[:8]}')
             with open(tmpDeacScript, 'w+', encoding='utf-8') as _file:
                 _file.write('#!/bin/bash\nfor i in $(seq 10); do kill -s 1 ${i} 2>&1 | true ; done\n')
-            st = os.stat(tmpDeacScript)
-            os.chmod(tmpDeacScript, st.st_mode | stat.S_IEXEC)
-
-            self.sandboxInstance.copyFileFromHost(tmpDeacScript,
-                    os.path.join(self.sandboxInstance.getSandboxPath(), './usr/bin/deactivate'))
+            try:
+                st = os.stat(tmpDeacScript)
+                os.chmod(tmpDeacScript, st.st_mode | stat.S_IEXEC)
+                self.sandboxInstance.copyFileFromHost(tmpDeacScript,
+                        os.path.join(self.sandboxInstance.getSandboxPath(), './usr/bin/deactivate'))
+            finally:
+                os.unlink(tmpDeacScript)
 
         fixDeactivate()
 
@@ -1054,8 +1056,11 @@ class sandboxFixes:
             tmpLDPath = os.path.join(self.tmpPath, f'ld.wsl.conf_{str(uuid.uuid4())[:8]}')
             with open(tmpLDPath, 'w+', encoding='utf-8') as _file:
                 _file.write('/usr/lib/wsl/lib')
-            self.sandboxInstance.copyFileFromHost(tmpLDPath,
-                os.path.join(self.sandboxInstance.getSandboxPath(), './etc/ld.so.conf.d/wsl.conf'))
+            try:
+                self.sandboxInstance.copyFileFromHost(tmpLDPath,
+                    os.path.join(self.sandboxInstance.getSandboxPath(), './etc/ld.so.conf.d/wsl.conf'))
+            finally:
+                os.unlink(tmpLDPath)
 
         def setEnvVar(tmpENVFile):
             '''
@@ -1107,7 +1112,10 @@ class sandboxFixes:
             with open(tmpSandbox, 'w+', encoding='utf-8') as _file:
                 _file.write(fixApt)
 
-            self.sandboxInstance.copyFileFromHost(tmpSandbox, os.path.join(appConfPath, '99appBox'))
+            try:
+                self.sandboxInstance.copyFileFromHost(tmpSandbox, os.path.join(appConfPath, '99appBox'))
+            finally:
+                os.unlink(tmpSandbox)
 
             ## Hack of a hack...
             ## cp /bin/true /usr/bin/dpkg-statoverride
@@ -1143,7 +1151,10 @@ class sandboxFixes:
             with open(tmpSandbox, 'w+', encoding='utf-8') as _file:
                 _file.write(fixDNF)
 
-            self.sandboxInstance.copyFileFromHost(tmpSandbox, os.path.join(appConfPath, 'dnf.conf'))
+            try:
+                self.sandboxInstance.copyFileFromHost(tmpSandbox, os.path.join(appConfPath, 'dnf.conf'))
+            finally:
+                os.unlink(tmpSandbox)
 
     def installAppBox(self):
         '''
@@ -1225,8 +1236,11 @@ fi
         tmpENVFile = os.path.join(self.tmpPath, f'env.sh_{str(uuid.uuid4())[:8]}')
         with open(tmpENVFile, 'w+', encoding='utf-8') as _file:
             _file.write(all_envs)
-        self.sandboxInstance.copyFileFromHost(tmpENVFile,
-                os.path.join(self.sandboxInstance.getSandboxPath(), './etc/profile.d/imageEnv.sh'))
+        try:
+            self.sandboxInstance.copyFileFromHost(tmpENVFile,
+                    os.path.join(self.sandboxInstance.getSandboxPath(), './etc/profile.d/imageEnv.sh'))
+        finally:
+            os.unlink(tmpENVFile)
 
     def stampSandbox(self):
 
