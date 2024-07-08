@@ -1637,18 +1637,18 @@ class sessionManager:
             else:
                 commandPath = os.path.join(self.sandboxPath, 'bin/bash')
             if os.path.exists(commandPath):
-                command = 'env -i /bin/bash --rcfile /etc/profile -c "sleep 1; env -i /bin/bash --rcfile /etc/profile -l; exit $?"'
+                command = 'env -i /bin/bash --rcfile /etc/profile -l -c "sleep 1; env -i /bin/bash --rcfile /etc/profile -l; exit $?"'
             else:
                 command = 'env -i /bin/sh'
         else:
             if not self.compatV1:
                 commandPath = os.path.join(self.sandboxPath, 'bin/bash')
                 if os.path.exists(commandPath):
-                    command = f'env -i /bin/bash --rcfile /etc/profile -c "sleep 1; {command}" '
+                    command = f'env -i /bin/bash --rcfile /etc/profile -l -c "sleep 1; {command}" '
                 else:
                     pass
             else:
-                command = f'env -i /bin/bash --rcfile /etc/profile -c \'sleep 1; {command}\''
+                command = f'env -i /bin/bash --rcfile /etc/profile -l -c \'sleep 1; {command}\''
         #command = '/bin/bash -l'
 
         if not self.compatV1:
