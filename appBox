@@ -361,13 +361,15 @@ class imageManager:
 
         return realScheme, realNetLoc, imageLabel, tag
 
-    @staticmethod
-    def tokenRequired(func):
+    #@staticmethod This makes Python 3.9 unhappy
+    def tokenRequired(func): # pylint: disable=E0213, because of P39
+        '''
+        '''
         @wraps(func)
         def decorated_function(*args, **kwargs):
             self = args[0]
             self.authenticator.refreshToken()
-            return func(*args, **kwargs)
+            return func(*args, **kwargs) # pylint: disable=E1102, because of P39
         return decorated_function
 
     @staticmethod
@@ -625,7 +627,7 @@ class imageManager:
 
         if 'errors' in manifest:
             errs = manifest['errors']
-            raise Exception('Error in Manifest: {errs}') # pylint: disable=W0719
+            raise Exception(f'Error in Manifest: {errs}') # pylint: disable=W0719
 
         if 'layers' in manifest:
             for thisLayer in manifest['layers']:
@@ -755,17 +757,19 @@ class imageManager:
                     #appLogger.debug('Extracting: {}'.format(_entry.name))
                     if _entry.isdir():
                         os.makedirs(os.path.join(installPath, _entry.name), exist_ok=True)
-                    elif _entry.issym() or _entry.islnk():
-                        _tfile.extract(_entry, path=installPath)
                     else:
                         if os.path.exists(os.path.join(installPath, _entry.name)):
                             os.remove(os.path.join(installPath, _entry.name))
                         parent = os.path.dirname(os.path.join(installPath, _entry.name))
                         os.makedirs(os.path.join(installPath, parent), exist_ok=True)
-                        current = stat.S_IMODE(os.lstat(parent).st_mode)
-                        os.chmod(parent, current | stat.S_IWUSR | stat.S_IRUSR | stat.S_ISGID)
-                        _tfile.extract(_entry, path=installPath, filter='data')
-
+                        if not (_entry.issym() or _entry.islnk()):
+                            current = stat.S_IMODE(os.lstat(parent).st_mode)
+                            os.chmod(parent, current | stat.S_IWUSR | stat.S_IRUSR | stat.S_ISGID)
+                        _tfile.extract(_entry, path=installPath, filter='fully_trusted')
+                        if not (_entry.issym() or _entry.islnk()):
+                            output = os.path.join(installPath, _entry.name)
+                            current = stat.S_IMODE(os.lstat(output).st_mode)
+                            os.chmod(output, current | stat.S_IWUSR | stat.S_IRUSR | stat.S_ISGID)
         return 0
 
 
@@ -1051,6 +1055,9 @@ class sandboxFixes:
                 os.path.join(self.sandboxInstance.getSandboxPath(), './etc/ld.so.conf.d/wsl.conf'))
 
         def setEnvVar(tmpENVFile):
+            '''
+            Build the env vars which we want to expose users to
+            '''
 
             _home = getHome()
             envs  = 'export DEBIAN_FRONTEND="noninteractive"\n'
@@ -1060,8 +1067,11 @@ class sandboxFixes:
             envs += f'export HOSTNAME={socket.gethostname()}\n'
             envs += 'export DISPLAY=:0\n'
             envs += 'export WAYLAND_DISPLAY=wayland-0\n'
+            envs += 'if [ $(id -u) -eq 0 ]; then USR_MSG="\033[1;31mAS ROOT\033[0m"; else USR_MSG="\033[32mas $(whoami)\033[0m"; fi\n'
             envs += 'echo "\n Now Running \033[31m[\033[33ma\033[32mp'
-            envs += '\033[36mp\033[32mB\033[36mo\033[34mx\033[m]\033[0m !\n"\n'
+            envs += '\033[36mp\033[32mB\033[36mo\033[34mx\033[m]\033[0m ! '
+            envs += f'(sandbox based on image: \033[1;31m{self.iManager.userPath}\033[0m) '
+            envs += ' ${USR_MSG}\n"\n'
             envs += '/usr/sbin/ldconfig\n'
             with open(tmpENVFile, 'w+', encoding='utf-8') as _file:
                 _file.write(envs)
