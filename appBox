@@ -725,6 +725,9 @@ class imageManager:
             appLogger.error('Failed to extract layers: %s', err)
             if appLogger.level == logging.DEBUG:
                 raise
+            if os.path.exists(installPath):
+                appLogger.error('Cleaning up: %s', installPath)
+                shutil.rmtree(installPath)
             return 1
 
     def _extractLayers(self, installPath):
@@ -1034,7 +1037,7 @@ class sandboxFixes:
         def fixDeactivate():
             tmpDeacScript = os.path.join(self.tmpPath, f'deactivate_{str(uuid.uuid4())[:8]}')
             with open(tmpDeacScript, 'w+', encoding='utf-8') as _file:
-                _file.write('#!/bin/bash\nfor i in $(seq 10); do kill -s 1 ${i} 2>&1 | true ; done\n')
+                _file.write('#!/bin/bash\nfor i in $(seq 100); do kill -s 1 ${i} 2>&1 | true ; done\n')
             try:
                 st = os.stat(tmpDeacScript)
                 os.chmod(tmpDeacScript, st.st_mode | stat.S_IEXEC)
@@ -1185,7 +1188,7 @@ class sandboxFixes:
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 if [ "$#" -eq 0 ]; then
-  cmd="env -i /bin/bash "
+  cmd="env -i --default-signal=SIGHUP /bin/bash -l "
 else
   cmd="$*"
 fi
@@ -1232,6 +1235,8 @@ fi
             appLogger.debug('Setting Environment %s', _env)
             k, v = _env.split('=')
             all_envs += f"export {k}=\"{v}\"\n"
+
+        all_envs += 'alias deactivate=/bin/deactivate\n'
 
         tmpENVFile = os.path.join(self.tmpPath, f'env.sh_{str(uuid.uuid4())[:8]}')
         with open(tmpENVFile, 'w+', encoding='utf-8') as _file:
@@ -1651,18 +1656,18 @@ class sessionManager:
             else:
                 commandPath = os.path.join(self.sandboxPath, 'bin/bash')
             if os.path.exists(commandPath):
-                command = 'env -i /bin/bash --rcfile /etc/profile -c "sleep 1; env -i /bin/bash --rcfile /etc/profile -l; exit $?"'
+                command = 'env -i --default-signal=SIGHUP /bin/bash -c "sleep 1; env -i --default-signal=SIGHUP /bin/bash --rcfile /etc/profile -l; exit $?"'
             else:
                 command = 'env -i /bin/sh'
         else:
             if not self.compatV1:
                 commandPath = os.path.join(self.sandboxPath, 'bin/bash')
                 if os.path.exists(commandPath):
-                    command = f'env -i /bin/bash --rcfile /etc/profile -l -c "sleep 1; {command}" '
+                    command = f'env -i --default-signal=SIGHUP /bin/bash --rcfile /etc/profile -c "sleep 1; {command}" '
                 else:
                     pass
             else:
-                command = f'env -i /bin/bash --rcfile /etc/profile -l -c \'sleep 1; {command}\''
+                command = f'env -i --default-signal=SIGHUP /bin/bash --rcfile /etc/profile -c \'sleep 1; {command}\''
         #command = '/bin/bash -l'
 
         if not self.compatV1:
