@@ -62,49 +62,56 @@ from urllib.parse import urlparse
 import uuid
 
 
-__version__ = '3.0.0'
+__version__ = '3.0.1'
 appBoxVersion = __version__
 
 
-# Global Logger
+# Global Logger(s)
 appLogger = logging.getLogger('appBox')
 barLogger = logging.getLogger('barLogger')
 
 
 class OneLineProgressHandler(logging.StreamHandler):
+    '''
+    Small class for handling progress bars in the terminal
+    '''
     def emit(self, record):
-        """
+        '''
         Emit a record with carriage return to overwrite the current line.
-        """
+        '''
         message = self.format(record)
         stream = self.stream
         stream.write(f'\r{message}')  # Overwrite the current line
         stream.flush()
 
 
-def getUN():
+def getUN() -> str:
     '''
     Return the username of this account
     '''
     return pwd.getpwuid(os.getuid())[0]
 
 
-def getHome():
+def getHome() -> str:
     '''
     Return the home directory of this account
     '''
     return pwd.getpwuid(os.getuid())[5]
 
 
-def findMountPath(path):
+def findMountPath(path) -> str:
+    '''
+    Find the mount path for a given path
+    '''
     path = os.path.abspath(path)
     while not os.path.ismount(path):
         path = os.path.dirname(path)
     return path
 
 
-def printBar(iteration, total, prefix='', suffix='', length=50, fill='█'):
-    """
+def printBar(iteration : int, total : int, prefix : str='',
+             suffix : str='', length : int=50, fill : str='█') -> None:
+    '''
     Call in a loop to create terminal progress bar
     @params:
         iteration   - Required  : current iteration (Int)
@@ -113,7 +120,7 @@ def printBar(iteration, total, prefix='', suffix='', length=50, fill='█'):
         suffix      - Optional  : suffix string (Str)
         length      - Optional  : character length of bar (Int)
         fill        - Optional  : bar fill character (Str)
-    """
+    '''
     if total<=0:
         total = 1
     percent = 100 * (iteration / float(total))
@@ -128,9 +135,12 @@ def printBar(iteration, total, prefix='', suffix='', length=50, fill='█'):
         barLogger.info('\n')
 
 
-def bytesToHuman(num_bytes):
+def bytesToHuman(num_bytes : int) -> str:
+    '''
+    Convert bytes to human readable format
+    '''
     # Define size units
-    units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB']
+    units = ['', 'K', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y']
     size = num_bytes
     unit_index = 0
 
@@ -140,15 +150,15 @@ def bytesToHuman(num_bytes):
         unit_index += 1
 
     # Format the result to 2 decimal places
-    return f"{size:.2f} {units[unit_index]}"
+    return f"{size:.2f} {units[unit_index]}B"
 
 
 class downloadTokenAuthenticator:
 
-    def __init__(self, repoURL="https://example.com", imagePath="project/image"):
-        #
-        #
-        #
+    def __init__(self, repoURL : str="https://example.com", imagePath : str="project/image"):
+        '''
+        Note: This is a very basic implementation of the Docker Registry V2 API
+        '''
         self.token = ""
         self.repoURL = repoURL
         self.imagePath = imagePath
@@ -160,9 +170,10 @@ class downloadTokenAuthenticator:
         self.tokenExpiry = time.time() - 300  # Assume token is valid for 5min
         #self.getNewToken()
 
-    def _getAuthnService(self):
-        #
-        #
+    def _getAuthnService(self) -> None:
+        '''
+        This method gets the authentication service for the registry
+        '''
         appLogger.debug("1) Getting Authn Service: %s", self.repoURL)
         parsedURL = urllib.parse.urlsplit(self.repoURL)
         if (parsedURL.hostname is None) and (parsedURL.netloc is not None):
@@ -202,9 +213,10 @@ class downloadTokenAuthenticator:
 
             raise ConnectionError(f'Redirected to: "{response.getheader("Location")}"')
 
-        return
-
-    def _getDownloadToken(self):
+    def _getDownloadToken(self) -> None:
+        '''
+        This method gets the download token for the registry
+        '''
 
         fullTokenURL = f'{self.authRealm}?service={self.authService}&scope={self.authScope}'
         parsedURL = urllib.parse.urlsplit(fullTokenURL)
@@ -232,7 +244,10 @@ class downloadTokenAuthenticator:
 
         appLogger.debug("Token: %s",self.token)
 
-    def getNewToken(self):
+    def getNewToken(self) -> None:
+        '''
+        Get a new token for the registry
+        '''
 
         if self.tokenRequired:
             self._getAuthnService()
@@ -240,10 +255,16 @@ class downloadTokenAuthenticator:
         else:
             return
 
-    def isTokenValid(self):
+    def isTokenValid(self) -> bool:
+        '''
+        Check if the token is still valid
+        '''
         return time.time() < self.tokenExpiry
 
-    def refreshToken(self):
+    def refreshToken(self) -> None:
+        '''
+        Refresh the token if needed
+        '''
         if self.tokenRequired:
             if not self.isTokenValid():
                 self.getNewToken()
@@ -254,9 +275,15 @@ class downloadTokenAuthenticator:
 
 
 class imageManager:
+    '''
+    Class for managing images, downloading, extracting, etc...
+    '''
 
-    def __init__(self, imagePath="centos:7",
-                 installPath=None, layerCacheFolder=None, forceUpdate=False):
+    def __init__(self, imagePath : str="almalinux:9",
+                 installPath : str ='', layerCacheFolder : str='', forceUpdate : bool=False):
+        '''
+        Initialize the image manager instance
+        '''
 
         self.userPath = imagePath
         self.imgHash = hashlib.sha256(imagePath.encode()).hexdigest()
@@ -273,7 +300,7 @@ class imageManager:
         self.imageTag = parsedImage[3]
 
         userName = pwd.getpwuid(os.getuid())[0]
-        if layerCacheFolder is None:
+        if not layerCacheFolder:
             self.layerCacheFolder = os.path.join(os.path.join('/tmp', 'appBox_'+userName),
                                                  'layerCache')
         else:
@@ -282,16 +309,20 @@ class imageManager:
         if not os.path.exists(self.layerCacheFolder):
             os.makedirs(self.layerCacheFolder)
 
-        if installPath is None:
+        if not installPath:
             self.installPath = os.path.join(os.path.join('/scratch', 'appBox_'+userName), 'sandbox')
+            if not os.path.exists(os.path.dirname(self.installPath)):
+                self.installPath = os.path.join(getHome(), 'sandbox')
         else:
             self.installPath = installPath
 
         self.authenticator = downloadTokenAuthenticator(self.downloadService, self.imagePath)
 
     @staticmethod
-    def isUrl(candidate):
-        """Check if the given string is a URL, even if it doesn't have a protocol."""
+    def isUrl(candidate : str) -> bool:
+        '''
+        Check if the given string is a URL, even if it doesn't have a protocol.
+        '''
         urlPattern = re.compile(
             r'^(https?|ftp)?(:\/\/)?'
             r'(([a-zA-Z0-9_-]+\.)+[a-zA-Z]{2,6})'
@@ -300,15 +331,17 @@ class imageManager:
         return re.match(urlPattern, candidate) is not None
 
     @staticmethod
-    def isLabel(candidate):
-        """Check if the given string is a DockerHub label."""
+    def isLabel(candidate : str) -> bool:
+        '''
+        Check if the given string is a DockerHub label.
+        '''
         dockerhubLabelPattern = re.compile(
             r'^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)?(:[a-zA-Z0-9_.-]+)?$'
         )
         return re.match(dockerhubLabelPattern, candidate) is not None
 
     @staticmethod
-    def parseImgString(image):
+    def parseImgString(image : str) -> tuple:
         '''
         Method to parse strings for images, urls, dockerhub label:tags, etc... 
         '''
@@ -356,24 +389,32 @@ class imageManager:
         if len(imageLabel.split('/')) == 1:
             imageLabel = 'library/' + imageLabel
 
-        appLogger.debug('Image: %s, Scheme: %s, Netloc: %s, Label: %s, Tag: %s',
-                        image, realScheme, realNetLoc, imageLabel, tag)
+        if appLogger.level == logging.DEBUG:
+            appLogger.debug('Parsed Image: %s', image)
+            appLogger.debug('Parsed Scheme: %s', realScheme)
+            appLogger.debug('Parsed NetLoc: %s', realNetLoc)
+            appLogger.debug('Parsed Label: %s', imageLabel)
+            appLogger.debug('Parsed Tag: %s', tag)
 
         return realScheme, realNetLoc, imageLabel, tag
 
     #@staticmethod This makes Python 3.9 unhappy
-    def tokenRequired(func): # pylint: disable=E0213, because of P39
+    def tokenRequired(func : callable): # pylint: disable=E0213
         '''
+        Decorator to check if a token is required and refresh it if needed
         '''
         @wraps(func)
         def decorated_function(*args, **kwargs):
             self = args[0]
             self.authenticator.refreshToken()
-            return func(*args, **kwargs) # pylint: disable=E1102, because of P39
+            return func(*args, **kwargs) # pylint: disable=E1102
         return decorated_function
 
     @staticmethod
-    def getHeaders(token):
+    def getHeaders(token: str='') -> dict:
+        '''
+        Get the headers for the request
+        '''
         returnable = {
                  "Accept":
         "application/vnd.docker.distribution.manifest.v2+json,"+
@@ -384,15 +425,18 @@ class imageManager:
                  "Content-Type": "application/json",
                  "User-Agent": "curl/8.0.1",
         }
-        if token is None:
+        if not token:
             del returnable['Authorization']
         return returnable
 
-    def getManifest(self, manifestVer=None):
+    def getManifest(self, manifestVer : str='') -> str:
+        '''
+        Get the manifest for the image
+        '''
 
         manCache = os.path.join(self.layerCacheFolder, self.imgHash)
 
-        if manifestVer is None:
+        if not manifestVer:
             manifestVer = self.imageTag
 
         contents = {}
@@ -418,9 +462,12 @@ class imageManager:
         return contents[manifestVer]
 
     @tokenRequired
-    def getRemoteManifest(self, manifestVer=None):
+    def getRemoteManifest(self, manifestVer : str='') -> str:
+        '''
+        Get the manifest for the image
+        '''
 
-        if manifestVer is None:
+        if not manifestVer:
             manifestVer = self.imageTag
 
         parsedURL = urlparse(self.downloadService)
@@ -442,9 +489,15 @@ class imageManager:
         return thisResponse.decode('utf-8')
 
     @staticmethod
-    def checkDownloadIntegrity(downloadLocation, refShasum):
+    def checkDownloadIntegrity(downloadLocation : str, refShasum : str) -> bool:
+        '''
+        Check the integrity of the downloaded file
+        '''
 
-        def compute_sha256(filepath):
+        def compute_sha256(filepath : str) -> str:
+            '''
+            Compute the SHA256 checksum of a file
+            '''
             sha256_hash = hashlib.sha256()
             with open(filepath, "rb") as file:
                 # Read the file in chunks to handle large files
@@ -454,7 +507,10 @@ class imageManager:
                     sha256_hash.update(byte_block)
                 return sha256_hash.hexdigest()
 
-        def verify_file_sha256(filepath, reference_sha256):
+        def verify_file_sha256(filepath : str, reference_sha256: str) -> bool:
+            '''
+            Verify the SHA256 checksum of a file
+            '''
             computed_sha256 = compute_sha256(filepath)
             if computed_sha256 == reference_sha256:
                 appLogger.debug("The file's SHA256 checksum matches the reference.")
@@ -467,11 +523,18 @@ class imageManager:
 
         return verify_file_sha256(downloadLocation, refShasum)
 
-    def getLayerFileName(self, digest):
+    def getLayerFileName(self, digest : str) -> str:
+        '''
+        Get the filename for the layer
+        '''
         return os.path.join(self.layerCacheFolder, f"{digest}.tar.gz")
 
     @tokenRequired
-    def downloadLayers(self, digests, retry=True, retryCount=3, retryDelay=0):
+    def downloadLayers(self, digests : list, retry : bool=True,
+                       retryCount : int=3, retryDelay : int=0) -> bool:
+        '''
+        Download the layers for the image
+        '''
 
         i=0
         for images in digests:
@@ -518,8 +581,11 @@ class imageManager:
                         os.rename(outputFile+'.tmp', outputFile)
         return True
 
-
-    def _downloadLocation(self, host, port, path, query, outputFile, digestSha):
+    def _downloadLocation(self, host : str, port : int, path : str,
+                          query : str, outputFile : str, digestSha : str) -> None:
+        '''
+        Download the layer from the given location
+        '''
 
         conn = http.client.HTTPSConnection(host, port=port if port else 443)
         appLogger.debug("Querying Authn Service: %s", path)
@@ -563,9 +629,10 @@ class imageManager:
         if not imageManager.checkDownloadIntegrity(outputFile, digestSha):
             raise ConnectionError('Failed to download layer: "checksum failure"')
 
-
-
-    def _downloadLayer(self, digest):
+    def _downloadLayer(self, digest : str) -> bool:
+        '''
+        Download the layer from the given location
+        '''
 
         digestSha = digest.split(':')[1]
 
@@ -604,13 +671,16 @@ class imageManager:
         return True
 
     @staticmethod
-    def getArch():
+    def getArch() -> str:
+        '''
+        Get the architecture of the system
+        '''
         if platform.machine().lower() in ['amd64', 'x86_64']:
             return 'amd64'
         elif platform.machine().lower() in ['aarch64', 'arm64']:
             return 'arm64'
 
-    def getDigest(self, manifest):
+    def getDigest(self, manifest : str) -> tuple:
         '''
         Get the digest for the layers in the manifest
         '''
@@ -657,7 +727,10 @@ class imageManager:
         #raise Exception('here')
         return digestList, thisConfig
 
-    def getConfig(self):
+    def getConfig(self) -> dict:
+        '''
+        Get the config for the image
+        '''
 
         imageManifest = self.getManifest()
         _, digest = self.getDigest(json.loads(imageManifest))
@@ -679,7 +752,10 @@ class imageManager:
 
         return _content
 
-    def _downloadConfig(self, digest):
+    def _downloadConfig(self, digest : str) -> None:
+        '''
+        Download the config for the image
+        '''
 
         success = False
         try:
@@ -695,7 +771,10 @@ class imageManager:
 
         os.rename(self.getLayerFileName(digest)+'.tmp', self.getLayerFileName(digest)[:-7])
 
-    def downloadImage(self):
+    def downloadImage(self) -> list:
+        '''
+        Download the image layers
+        '''
 
         imageManifest = self.getManifest()
 
@@ -711,7 +790,10 @@ class imageManager:
         else:
             return []
 
-    def extractImage(self, overridePath=None):
+    def extractImage(self, overridePath : str='') -> int:
+        '''
+        Extract the image layers
+        '''
 
         installPath = overridePath if overridePath else self.installPath
 
@@ -730,7 +812,10 @@ class imageManager:
                 shutil.rmtree(installPath)
             return 1
 
-    def _extractLayers(self, installPath):
+    def _extractLayers(self, installPath : str) -> int:
+        '''
+        Extract the layers for the image
+        '''
 
         for layer in self.downloadImage():
 
@@ -779,496 +864,13 @@ class imageManager:
         return 0
 
 
-class sandboxFixes:
-    '''
-    Class to handle the fixes needed for the sandbox
-    '''
-
-    def __init__(self, addNV, sandboxInstance, iManager):
-        '''
-        '''
-
-        self.addNVidia = addNV
-        self.sandboxInstance = sandboxInstance
-        self.iManager = iManager
-
-        self.tmpPath = '/tmp'
-
-    def applyAllFixes(self):
-        '''
-        Apply all of the fixes to this sandbox
-        '''
-        self.fixFilePermissions()
-        self.fixAptSandboxing()
-        self.fixDnfSandboxing()
-        self.fixMissingPaths()
-        self.fixMissingStubs()
-        self.fixUserAccounts()
-        self.fixAliases()
-        self.fixEnvironment()
-        self.installAppBox()
-        self.copyFromHost()
-        self.fixForLies()
-        self.applyImageEnv()
-        self.stampSandbox()
-
-    def copyFromHost(self):
-        '''
-        Copy certain configs from the host to the sandbox so things work
-        '''
-
-        fileList = ['/etc/resolv.conf', '/etc/hostname',
-                    '/etc/localtime', '/etc/timezone', '/etc/vimrc']
-
-        for _file in fileList:
-            self.sandboxInstance.copyFileFromHost(_file,
-                    os.path.abspath(os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_file)))
-
-    def fixFilePermissions(self):
-        '''
-        Fix the permissions of a given path
-        '''
-        if self.sandboxInstance.rootfs:
-            return
-        for root, dirs, files in os.walk(self.sandboxInstance.getSandboxPath(), topdown=True):
-            for _dir in dirs:
-                thisPath = os.path.join(root,_dir)
-                if not os.path.islink(thisPath):
-                    current = stat.S_IMODE(os.lstat(thisPath).st_mode)
-                    os.chmod(thisPath, current | stat.S_IWUSR | stat.S_IRUSR | stat.S_ISGID)
-            for _file in files:
-                thisPath = os.path.join(root,_file)
-                if not os.path.islink(thisPath):
-                    current = stat.S_IMODE(os.lstat(thisPath).st_mode)
-                    os.chmod(os.path.join(root,_file), current | stat.S_IWUSR | stat.S_IRUSR)
-
-    def _getPathList(self):
-        '''
-        Return the list of paths we want to mount into the sandbox
-        '''
-        # This is a good fraction of the lsb because not all images follow the lsb...
-        # which means...
-        # well...
-        # yeah...
-        basePathList = ['/afs', '/dev', '/etc', '/cvmfs', '/scratch', '/Data', '/localdisk',
-                          '/sys', '/tmp', '/home', '/proc', f'/tmp/{getUN()}', '/mnt']
-
-        if self.addNVidia:
-            basePathList.append('/usr/lib/wsl')
-
-        return basePathList
-
-    def fixMissingPaths(self):
-        '''
-        Fix potentially missing paths in the sandbox
-        '''
-        neededSandboxPaths = self._getPathList()
-
-        absPaths = []
-        for _path in neededSandboxPaths:
-            absPaths.append(os.path.abspath(
-                        os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_path)))
-
-        for _path in absPaths:
-            self.sandboxInstance.createSandboxPath(_path)
-
-    def _getStubList(self):
-        '''
-        Make stubs for files to be mounted in from the host
-        '''
-        baseStubs = ['/etc/resolv.conf', '/etc/hostname']
-
-        if self.addNVidia:
-            baseStubs.append('/usr/bin/nvidia-smi')
-            baseStubs.append('/usr/bin/nvidia-modprobe')
-
-        return baseStubs
-
-    def fixMissingStubs(self):
-        '''
-        Create the stubs needed for the sandbox
-        '''
-        neededStubs = self._getStubList()
-
-        absPaths = []
-        for _path in neededStubs:
-            absPaths.append(os.path.abspath(
-                        os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_path)))
-
-        for _path in absPaths:
-            self.sandboxInstance.createSandboxEmptyFile(_path)
-
-    def getAnonUIDGID(self):
-        '''
-        Return the Anon UID and GID for the sandbox
-        In principle this can change based on the system, but for now it's fixed
-        '''
-        # TODO work out if we need to detect/change this
-        return (65534, 65534)
-
-    def fixUserAccounts(self):
-        '''
-        Fix the user accounts within the sandbox
-        '''
-        tmpPasswdFile = os.path.join(self.tmpPath, f'passwd_{str(uuid.uuid4())[:8]}')
-        try:
-            self._fixPasswd(tmpPasswdFile)
-        finally:
-            os.unlink(tmpPasswdFile)
-        tmpGroupFile = os.path.join(self.tmpPath, f'group_{str(uuid.uuid4())[:8]}')
-        try:
-            self._fixGroup(tmpGroupFile)
-        finally:
-            os.unlink(tmpGroupFile)
-        tmpShadowFile = os.path.join(self.tmpPath, f'gshadow_{str(uuid.uuid4())[:8]}')
-        try:
-            self._fixGShadow(tmpShadowFile)
-        finally:
-            os.unlink(tmpShadowFile)
-
-    def _fixPasswd(self, tmpPasswdFile):
-        '''
-        Fix the passwd config so the user mappings make sense
-        '''
-        self.sandboxInstance.copyFileToHost('/etc/passwd', tmpPasswdFile)
-
-        with open(tmpPasswdFile, 'r', encoding='utf-8') as _file:
-            _content = _file.read()
-            appLogger.debug('File: "%s"', tmpPasswdFile)
-            appLogger.debug('Content: "%s"', _content)
-
-        newContent = 'root:x:0:0:root:/root:/bin/bash\n'
-        newContent += f'{getUN()}:x:65534:65534:{getUN()}:{getHome()}:/bin/bash\n'
-
-        aUID, aGID = self.getAnonUIDGID()
-
-        for _line in _content.split('\n'):
-            if _line:
-                _user, _, _uid, _gid, _name, _home, _shell = _line.split(':')
-                if _user in ['root', getUN(), 'fax', 'input', 'kvm', 'render']:
-                    continue
-                if _user.startswith('systemd'):
-                    # A dirty trick to keep apt 'content' on Ubuntu systems
-                    continue
-                appLogger.debug(
-                    'User: "%s", UID: "%s", GID: "%s", Name: "%s", Home: "%s", Shell: "%s"',
-                                    _user, _uid, _gid, _name, _home, _shell)
-
-                newContent += f'{_user}:x:{aUID}:{aGID}:{_name}:{_home}:{_shell}\n'
-
-        with open(tmpPasswdFile, 'w+', encoding='utf-8') as _file:
-            _file.write(newContent)
-
-        self.sandboxInstance.copyFileFromHost(tmpPasswdFile,
-                            os.path.join(self.sandboxInstance.getSandboxPath(), './etc/passwd'))
-
-    def _fixGroup(self, tmpGroupFile):
-        '''
-        Fix the group permissions so that mappings make sense
-        '''
-        self.sandboxInstance.copyFileToHost('/etc/group', tmpGroupFile)
-
-        with open(tmpGroupFile, 'r', encoding='utf-8') as _file:
-            _content = _file.read()
-            appLogger.debug('File: "%s"', tmpGroupFile)
-            appLogger.debug('Content: "%s"', _content)
-
-        _, aGID = self.getAnonUIDGID()
-
-        newContent = 'root:x:0:\n'
-        newContent += f'{getUN()}:x:{aGID}:\n'
-
-        for _line in _content.split('\n'):
-            if _line:
-                _group, _, _gid, _users = _line.split(':')
-                if _group in ['root', getUN(), 'fax', 'input', 'kvm', 'render']:
-                    continue
-                if _group.startswith('systemd'):
-                    # A dirty trick to keep apt 'content' on Ubuntu systems
-                    continue
-                appLogger.debug('Group: "%s", GID: "%s", Users: "%s"', _group, _gid, _users)
-
-                newContent += f'{_group}:x:{aGID}:{_users}\n'
-
-        with open(tmpGroupFile, 'w+', encoding='utf-8') as _file:
-            _file.write(newContent)
-
-        self.sandboxInstance.copyFileFromHost(tmpGroupFile,
-                                os.path.join(self.sandboxInstance.getSandboxPath(), './etc/group'))
-
-    def _fixGShadow(self, tmpShadowFile):
-        '''
-        This fixes the gshadow config, mainly for debian systems
-        '''
-        self.sandboxInstance.copyFileToHost('/etc/gshadow', tmpShadowFile)
-        with open(tmpShadowFile, 'r', encoding='utf-8') as _file:
-            _content = _file.read()
-            appLogger.debug('File: "%s"', tmpShadowFile)
-            appLogger.debug('Content: "%s"', _content)
-
-        newContent = ''
-
-        for _line in _content.split('\n'):
-            if _line:
-                _pass = True
-                for check in ['fax', 'voice', 'sudo', 'dip', 'operator', 'src',
-                              'shadow', 'sasl', 'plugdev', 'staff', 'nogroup']:
-                    if _line.startswith(check):
-                        _pass = False
-                        break
-                if not _pass:
-                    continue
-                newContent += _line + '\n'
-
-        with open(tmpShadowFile, 'w+', encoding='utf-8') as _file:
-            _file.write(newContent)
-
-        self.sandboxInstance.copyFileFromHost(tmpShadowFile,
-                            os.path.join(self.sandboxInstance.getSandboxPath(), './etc/gshadow'))
-
-    def fixAliases(self):
-        '''
-        Fix the aliases in the sandbox
-        '''
-
-        self.sandboxInstance.createSandboxPath(
-                    os.path.join(self.sandboxInstance.getSandboxPath(), './etc/profile.d'))
-
-        def fixDeactivate():
-            tmpDeacScript = os.path.join(self.tmpPath, f'deactivate_{str(uuid.uuid4())[:8]}')
-            with open(tmpDeacScript, 'w+', encoding='utf-8') as _file:
-                _file.write('#!/bin/bash\nfor i in $(seq 100); do kill -s 1 ${i} 2>&1 | true ; done\n')
-            try:
-                st = os.stat(tmpDeacScript)
-                os.chmod(tmpDeacScript, st.st_mode | stat.S_IEXEC)
-                self.sandboxInstance.copyFileFromHost(tmpDeacScript,
-                        os.path.join(self.sandboxInstance.getSandboxPath(), './usr/bin/deactivate'))
-            finally:
-                os.unlink(tmpDeacScript)
-
-        fixDeactivate()
-
-    def fixEnvironment(self):
-        '''
-        Fix missing env vars at 'login' which includes wsl linkage
-        '''
-
-        if self.addNVidia:
-            self.sandboxInstance.createSandboxPath(
-                os.path.join(self.sandboxInstance.getSandboxPath(), './etc/ld.so.conf.d'))
-            tmpLDPath = os.path.join(self.tmpPath, f'ld.wsl.conf_{str(uuid.uuid4())[:8]}')
-            with open(tmpLDPath, 'w+', encoding='utf-8') as _file:
-                _file.write('/usr/lib/wsl/lib')
-            try:
-                self.sandboxInstance.copyFileFromHost(tmpLDPath,
-                    os.path.join(self.sandboxInstance.getSandboxPath(), './etc/ld.so.conf.d/wsl.conf'))
-            finally:
-                os.unlink(tmpLDPath)
-
-        def setEnvVar(tmpENVFile):
-            '''
-            Build the env vars which we want to expose users to
-            '''
-
-            _home = getHome()
-            envs  = 'export DEBIAN_FRONTEND="noninteractive"\n'
-            envs += 'export TERM=xterm-256color\n'
-            envs += 'export HOME=$( [ $(id -u) -eq 0 ] && echo "/root" ||'
-            envs += f'echo "{_home}" )\n'
-            envs += f'export HOSTNAME={socket.gethostname()}\n'
-            envs += 'export DISPLAY=:0\n'
-            envs += 'export WAYLAND_DISPLAY=wayland-0\n'
-            envs += 'if [ $(id -u) -eq 0 ]; then USR_MSG="\033[1;31mAS ROOT\033[0m"; else USR_MSG="\033[32mas $(whoami)\033[0m"; fi\n'
-            envs += 'echo "\n Now Running \033[31m[\033[33ma\033[32mp'
-            envs += '\033[36mp\033[32mB\033[36mo\033[34mx\033[m]\033[0m ! '
-            envs += f'(sandbox based on image: \033[1;31m{self.iManager.userPath}\033[0m) '
-            envs += ' ${USR_MSG}\n"\n'
-            envs += '/usr/sbin/ldconfig\n'
-            with open(tmpENVFile, 'w+', encoding='utf-8') as _file:
-                _file.write(envs)
-            self.sandboxInstance.copyFileFromHost(tmpENVFile,
-                    os.path.join(self.sandboxInstance.getSandboxPath(), './etc/profile.d/env.sh'))
-
-        tmpENVFile = os.path.join(self.tmpPath, f'env.sh_{str(uuid.uuid4())[:8]}')
-        try:
-            setEnvVar(tmpENVFile)
-        finally:
-            os.unlink(tmpENVFile)
-
-    def fixAptSandboxing(self):
-        '''
-        Fix issues related to installing packages on Debian in a single-user-sandbox...
-        '''
-
-        appConfPath = os.path.join(self.sandboxInstance.getSandboxPath(), './etc/apt/apt.conf.d/')
-        self.sandboxInstance.createSandboxPath(appConfPath)
-
-        layerPath = os.path.join(self.sandboxInstance.sandboxPath, './etc/apt/apt.conf.d/')
-        if os.path.exists(layerPath):
-            # Only want to apply this 'fix' in sandboxes where apt is installed
-
-            fixApt  = 'APT::Sandbox::User "root";\nAPT::Sandbox::Verify "0";\n'
-            fixApt += 'APT::Sandbox::Verify::IDs "0";\nAPT::Sandbox::Verify::Groups "0";\n'
-            fixApt += 'APT::Sandbox::Verify::Regain "0";'
-
-            tmpSandbox = os.path.join(self.tmpPath, f'sandbox-disable_{str(uuid.uuid4())[:8]}')
-            with open(tmpSandbox, 'w+', encoding='utf-8') as _file:
-                _file.write(fixApt)
-
-            try:
-                self.sandboxInstance.copyFileFromHost(tmpSandbox, os.path.join(appConfPath, '99appBox'))
-            finally:
-                os.unlink(tmpSandbox)
-
-            ## Hack of a hack...
-            ## cp /bin/true /usr/bin/dpkg-statoverride
-
-            shutil.copyfile(os.path.join(self.sandboxInstance.getSandboxPath(), 'bin/true'),
-                os.path.join(self.sandboxInstance.getSandboxPath(), 'usr/bin/dpkg-statoverride'))
-
-            shutil.copyfile(os.path.join(self.sandboxInstance.getSandboxPath(), 'bin/true'),
-                    os.path.join(self.sandboxInstance.getSandboxPath(), 'bin/dpkg-statoverride'))
-
-    def fixDnfSandboxing(self):
-        '''
-        Fix issues with Fedora sandboxing since we're now in a competition to do this...
-        '''
-
-        appConfPath = os.path.join(self.sandboxInstance.getSandboxPath(), './etc/dnf/')
-        self.sandboxInstance.createSandboxPath(appConfPath)
-
-        layerPath = os.path.join(self.sandboxInstance.sandboxPath, './etc/dnf/')
-        if os.path.exists(layerPath):
-            # Only want to apply this 'fix' in sandboxes where apt is installed
-
-            fixDNF  = '[main]\n'
-            fixDNF += 'gpgcheck=True\n'
-            fixDNF += 'installonly_limit=3\n'
-            fixDNF += 'clean_requirements_on_remove=True\n'
-            fixDNF += 'best=False\n'
-            fixDNF += 'skip_if_unavailable=True\n'
-            fixDNF += 'tsflags=nodocs\n'
-            fixDNF += 'excludepkgs=rpm-plugin-ima,ima-evm-utils\n' # <- the main fix(!)
-
-            tmpSandbox = os.path.join(self.tmpPath, f'dnf.conf_{str(uuid.uuid4())[:8]}')
-            with open(tmpSandbox, 'w+', encoding='utf-8') as _file:
-                _file.write(fixDNF)
-
-            try:
-                self.sandboxInstance.copyFileFromHost(tmpSandbox, os.path.join(appConfPath, 'dnf.conf'))
-            finally:
-                os.unlink(tmpSandbox)
-
-    def installAppBox(self):
-        '''
-        Install the appBox tool into the sandbox
-        '''
-
-        currentInstance = os.path.abspath(__file__)
-        if not os.path.exists(os.path.join(self.sandboxInstance.sandboxPath, './bin')):
-            os.makedirs(os.path.join(self.sandboxInstance.sandboxPath, './bin'))
-        installInstance = os.path.join(self.sandboxInstance.sandboxPath, './bin/appBox')
-
-        self.sandboxInstance.copyFileFromHost(currentInstance, installInstance)
-
-        cvmfsArgs = ''
-        if self.sandboxInstance.rootfs:
-            cvmfsArgs = f'-cvmfs {os.path.abspath(self.sandboxInstance.rootfs)}'
-
-        for _ in ['user', 'root']:
-            if _ == 'root':
-                asString = '-rcr "${cmd}"'
-                scriptName = 'activate-asroot'
-            else:
-                asString = '-rc "${cmd}"'
-                scriptName = 'activate'
-
-            activateScript = """#!/bin/bash
-
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-
-if [ "$#" -eq 0 ]; then
-  cmd="env -i --default-signal=SIGHUP /bin/bash -l "
-else
-  cmd="$*"
-fi
-
-/bin/env python3 ${SCRIPT_DIR}/appBox """
-            activateScript = activateScript + cvmfsArgs
-            activateScript = activateScript + " -l ${SCRIPT_DIR}/../ """ + asString
-
-            activatePath = os.path.join(self.sandboxInstance.sandboxPath, f'./bin/{scriptName}')
-            with open(activatePath, 'w+', encoding='utf-8') as _file:
-                _file.write(activateScript)
-
-            for _file in [installInstance, activatePath, ]:
-                st = os.stat(_file)
-                os.chmod(_file, st.st_mode | stat.S_IEXEC)
-
-    def fixForLies(self):
-        '''
-        Override some commands to stop people doing bad things by accident,
-        or on-purpose to themselves
-        '''
-
-        ## TODO decide if this is a bad idea or not...
-        ## Intention here is to 'stop' automated tooling from trying to do something
-        ## bad within the sandbox. This has the side-effect of stopping people changing
-        ## a file so that they can't so anything with it without magic cmdline-fu (d'oh!)
-
-        for _file in ['/usr/bin/chown', '/bin/chown',
-                      '/usr/bin/su', '/bin/su', '/usr/bin/sudo', '/bin/sudo']:
-            self.sandboxInstance.copyFileFromHost(
-                            os.path.join(self.sandboxInstance.getSandboxPath(), 'bin/true'),
-                            os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_file))
-            self.sandboxInstance.copyFileFromHost(
-                            os.path.join(self.sandboxInstance.getSandboxPath(), 'bin/true'),
-                            os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_file))
-
-    def applyImageEnv(self):
-
-        thisConfig = self.iManager.getConfig()
-
-        all_envs = ""
-        for _env in thisConfig['config']['Env']:
-
-            appLogger.debug('Setting Environment %s', _env)
-            k, v = _env.split('=')
-            all_envs += f"export {k}=\"{v}\"\n"
-
-        all_envs += 'alias deactivate=/bin/deactivate\n'
-
-        tmpENVFile = os.path.join(self.tmpPath, f'env.sh_{str(uuid.uuid4())[:8]}')
-        with open(tmpENVFile, 'w+', encoding='utf-8') as _file:
-            _file.write(all_envs)
-        try:
-            self.sandboxInstance.copyFileFromHost(tmpENVFile,
-                    os.path.join(self.sandboxInstance.getSandboxPath(), './etc/profile.d/imageEnv.sh'))
-        finally:
-            os.unlink(tmpENVFile)
-
-    def stampSandbox(self):
-
-        stampFile = os.path.join(self.sandboxInstance.getSandboxPath(), '.appBox')
-
-        appBoxData = {}
-        appBoxData['version'] = appBoxVersion
-        appBoxData['image'] = self.iManager.userPath
-        appBoxData['createTime'] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        appBoxData['originalSandboxPath'] = self.sandboxInstance.getSandboxPath()
-        appBoxData['originalUser'] = getUN()
-        appBoxData['originalUIDGID'] = f"{os.getuid()}:{os.getgid()}"
-
-
-        with open(stampFile, 'w', encoding='utf-8') as _file:
-            _file.write(json.dumps(appBoxData, indent=4))
-
 class sessionManager:
     '''
     Class for managing interactive sandbox sessions
     '''
 
-    def __init__(self, sandboxPath, compatV1=False, addNV=False, rootfs=None):
+    def __init__(self, sandboxPath : str, compatV1 : bool=False,
+                 addNV : bool=False, rootfs : str=''):
         '''
         Standard __init__ :)
         '''
@@ -1291,7 +893,7 @@ class sessionManager:
 
         self.ptyMfd, self.ptySfd = None, None
 
-    def getSandboxPath(self):
+    def getSandboxPath(self) -> str:
         '''
         Return the path to the sandbox
         '''
@@ -1303,8 +905,10 @@ class sessionManager:
             appLogger.debug('Sandbox Path: %s', self.sandboxPath)
             return self.sandboxPath
 
-    def setraw(self, fd, when=termios.TCSAFLUSH):
-        """Put terminal into a raw mode."""
+    def setraw(self, fd : str, when : int=termios.TCSAFLUSH) -> None:
+        '''
+        Put terminal into a raw mode.
+        '''
 
         # Indexes for termios list.
         iFLAG = 0
@@ -1327,7 +931,7 @@ class sessionManager:
         mode[cc][termios.VTIME] = 0
         termios.tcsetattr(fd, when, mode)
 
-    def _wrangleTTY(self):
+    def _wrangleTTY(self) -> None:
         '''
         This is some boiler-plate for setting up a pTTY
         '''
@@ -1350,7 +954,7 @@ class sessionManager:
         self.oldTTY = oldTTY
         self.stdoutM, self.stdoutS = stdoutMfd, stdoutSfd
 
-    def setupHostSpace(self):
+    def setupHostSpace(self) -> tuple:
         '''
         This sets up a 'root' namespace.
         This persists for the lifetime of this shell.
@@ -1399,11 +1003,20 @@ class sessionManager:
 
         return self.pidParent, self.pidChild
 
-    def _copyToFromSandbox(self, source, dest):
+    def _copyToFromSandbox(self, source : str, dest : str,
+                           overwrite : bool=False) -> None:
         '''
         Copy files from A to B
         '''
-        copyCMD = f'cp -rfHL --remove-destination {source} {dest}'
+        if overwrite:
+            copyCMD = f'cp -rfHL --remove-destination {source} {dest}'
+        else:
+            copyCMD = f'cp -rHL {source} {dest}'
+
+        if os.path.abspath(source) == os.path.abspath(dest):
+            appLogger.debug('Source and Destination are the same: %s', source)
+            return 0
+
         appLogger.debug('nsenter --preserve-credentials --user --mount --pid -t %s %s',
                             self.pidChild, copyCMD)
 
@@ -1414,13 +1027,16 @@ class sessionManager:
                         stderr = subprocess.PIPE,
                         shell=True)
 
-        ## TODO add better error checking here
         copyProc.wait()
         copyRC = copyProc.poll()
         appLogger.debug('Copy RC: %s', copyRC)
+        appLogger.debug('Copy out: %s', copyProc.stdout.read())
+        appLogger.debug('Copy err: %s', copyProc.stderr.read())
         del copyProc
+        return copyRC
 
-    def copyFileFromHost(self, hostFile, sandboxFile):
+    def copyFileFromHost(self, hostFile : str, sandboxFile : str,
+                         overwrite : bool=False) -> None:
         '''
         Copy a file from the host into the sandbox
         '''
@@ -1434,24 +1050,30 @@ class sessionManager:
         if i>10:
             appLogger.error('Too many symlinks in file: %s', hostFile)
             return
-        #if self.compatV1:
-        #    sandboxFile = os.path.join(self.getSandboxPath(), '.'+sandboxFile)
-        self._copyToFromSandbox(hostFile, sandboxFile)
 
-    def copyFileToHost(self, sandboxFile, hostFile):
+        rc = self._copyToFromSandbox(hostFile, sandboxFile, overwrite)
+
+        if rc != 0:
+            appLogger.error('Failed to Copy File: %s -> %s', hostFile, sandboxFile)
+            raise IOError('Failed to Copy File')
+
+    def copyFileToHost(self, sandboxFile : str, hostFile : str) -> None:
         '''
         Copy a file from a Sandbox to the host
         '''
-        #if self.compatV1:
         sandboxFile = os.path.join(self.getSandboxPath(), '.'+sandboxFile)
-        self._copyToFromSandbox(sandboxFile, hostFile)
+        rc = self._copyToFromSandbox(sandboxFile, hostFile)
 
-    def createSandboxPath(self, path, overridePID=None):
+        if rc != 0:
+            appLogger.error('Failed to Copy File: %s -> %s', hostFile, sandboxFile)
+            raise IOError('Failed to Copy File')
+
+    def createSandboxPath(self, path : str, overridePID : int=-1) -> None:
         '''
         Create a new path within the sandbox
         '''
         pidSpace = self.pidChild
-        if overridePID:
+        if overridePID > 0:
             pidSpace = overridePID
         createCMD = f'mkdir -p {os.path.abspath(path)}'
         appLogger.debug('nsenter --preserve-credentials --user --mount --pid -t %s %s',
@@ -1464,12 +1086,16 @@ class sessionManager:
                         stderr = subprocess.PIPE,
                         shell=True)
 
-        ## TODO add better error checking here
         createProc.wait()
+        createRC = createProc.poll()
         appLogger.debug('CreatePath RC: %s', createProc.poll())
         del createProc
 
-    def createSandboxEmptyFile(self, path):
+        if createRC != 0:
+            appLogger.error('Failed to Create Path: %s', path)
+            raise IOError('Failed to Create Path')
+
+    def createSandboxEmptyFile(self, path : str) -> None:
         '''
         Create an empty 'stub' file in the sandbox
         '''
@@ -1482,12 +1108,16 @@ class sessionManager:
                         stderr = subprocess.PIPE,
                         shell=True)
 
-        ## TODO add better error checking here
         createProc.wait()
+        createRC = createProc.poll()
         appLogger.debug('CreateFile RC: %s', createProc.poll())
         del createProc
 
-    def getChildID(self, thisPID):
+        if createRC != 0:
+            appLogger.error('Failed to Create File: %s', path)
+            raise IOError('Failed to Create File')
+
+    def getChildID(self, thisPID : int) -> tuple:
         '''
         Get the child ID of a given PID
         '''
@@ -1502,7 +1132,7 @@ class sessionManager:
 
         return thisPID, childPid
 
-    def getSharePaths(self):
+    def getSharePaths(self) -> list:
         '''
         This is a list of directories to be mounted into the sandbox from the host
         '''
@@ -1521,7 +1151,7 @@ class sessionManager:
             mounts += ['/usr/lib/wsl', '/usr/bin/nvidia-smi', '/usr/bin/nvidia-modprobe']
         return mounts
 
-    def mountHost(self, overridePID=None):
+    def mountHost(self, overridePID : int=-1) -> None:
         '''
         Mount the shared paths between the host and the sandbox namespace
         '''
@@ -1543,7 +1173,7 @@ class sessionManager:
 
             pidSpace = self.pidChild
             mountOpts = '--rbind --make-rslave'
-            if overridePID:
+            if overridePID > 0:
                 pidSpace = overridePID
                 mountOpts = '--rbind'
 
@@ -1560,11 +1190,15 @@ class sessionManager:
                             stderr = subprocess.PIPE,
                             shell=True)
             mountProc.wait()
-            ## TODO add better error checking here
+            mountRC = mountProc.poll()
             appLogger.debug('MountHost RC: %s', mountProc.poll())
             del mountProc
 
-    def mountrootfs(self, rootfs):
+            if mountRC != 0:
+                appLogger.error('Failed to Mount Host Path: %s as %s', hostPath, sandboxPath)
+                raise IOError('Failed to Mount Host Path')
+
+    def mountrootfs(self, rootfs : str) -> None:
         '''
         Mount the ROOTFS for the sandbox from a RO source
         '''
@@ -1596,12 +1230,16 @@ class sessionManager:
                         stderr = subprocess.PIPE,
                         shell=True)
 
-        ## TODO add better error checking here
         mountProc.wait()
+        mountRC = mountProc.poll()
         appLogger.debug('Mount RC: %s', mountProc.poll())
         del mountProc
 
-    def cleanupSpaces(self):
+        if mountRC != 0:
+            appLogger.error('Failed to Mount RootFS: %s', rootfs)
+            raise IOError('Failed to Mount RootFS')
+
+    def cleanupSpaces(self) -> None:
         '''
         Cleanup the 'persistent' spaces which have been created
         '''
@@ -1617,7 +1255,7 @@ class sessionManager:
         except (IOError, OSError) as delErr:
             appLogger.debug('Deletion Error: %s', delErr)
 
-    def setupSubSpace(self, asRoot):
+    def setupSubSpace(self, asRoot : bool=False) -> tuple:
         '''
         Create a subSpace within the root space of the host
         '''
@@ -1645,29 +1283,33 @@ class sessionManager:
 
         return (self.pidSubParent, self.pidSubChild)
 
-    def _getSandboxCmd(self, command=None, asRoot=False):
+    def _getSandboxCmd(self, command : str='', asRoot : bool=False) -> str:
         '''
         Get the command to run inside the sandbox (i.e. the shell)
         '''
 
-        if command is None:
+        # Calling env bash vs bash directly means that bash respects
+        # an external SIGHUP call used to 'deactivate' our sandbox
+
+        if not command:
             if self.rootfs:
                 commandPath = os.path.join(self.rootfs, 'bin/bash')
             else:
                 commandPath = os.path.join(self.sandboxPath, 'bin/bash')
             if os.path.exists(commandPath):
-                command = 'env -i --default-signal=SIGHUP /bin/bash -c "sleep 1; env -i --default-signal=SIGHUP /bin/bash --rcfile /etc/profile -l; exit $?"'
+                command = 'env -i /bin/bash -c "sleep 1; env -i /bin/bash'
+                command += ' --rcfile /etc/profile -l; exit $?"'
             else:
                 command = 'env -i /bin/sh'
         else:
             if not self.compatV1:
                 commandPath = os.path.join(self.sandboxPath, 'bin/bash')
                 if os.path.exists(commandPath):
-                    command = f'env -i --default-signal=SIGHUP /bin/bash --rcfile /etc/profile -c "sleep 1; {command}" '
+                    command = f'env -i /bin/bash --rcfile /etc/profile -c "sleep 1; {command}" '
                 else:
                     pass
             else:
-                command = f'env -i --default-signal=SIGHUP /bin/bash --rcfile /etc/profile -c \'sleep 1; {command}\''
+                command = f'env -i /bin/bash --rcfile /etc/profile -c \'sleep 1; {command}\''
         #command = '/bin/bash -l'
 
         if not self.compatV1:
@@ -1706,8 +1348,10 @@ class sessionManager:
 
         return chrootCMD
 
-    def read_from_master(self, process):
-        """Read from the master PTY file descriptor and print to stdout."""
+    def read_from_master(self, process : subprocess.Popen) -> None:
+        '''
+        Read from the master PTY file descriptor and print to stdout.
+        '''
         try:
             while True:
                 rlist, _, _ = select.select([self.ptyMfd], [], [], 0.1)
@@ -1730,8 +1374,10 @@ class sessionManager:
             except OSError:
                 pass
 
-    def write_to_master(self, process):
-        """Write user input to the master PTY file descriptor."""
+    def write_to_master(self, process : subprocess.Popen) -> None:
+        '''
+        Write user input to the master PTY file descriptor.
+        '''
         old_settings = termios.tcgetattr(sys.stdin)
         try:
             tty.setraw(sys.stdin)
@@ -1753,16 +1399,20 @@ class sessionManager:
             except OSError:
                 pass
 
-    def handle_sigwinch(self, signum, frame): # pylint: disable=locally-disabled, unused-argument
-        """Handle window resize signal and adjust the PTY window size."""
+    def handle_sigwinch(self, signum : int, frame : any) -> None: # pylint: disable=locally-disabled, unused-argument
+        '''
+        Handle window resize signal and adjust the PTY window size.
+        '''
         s = struct.pack('HHHH', 0, 0, 0, 0)
         rows, cols, xpixels, ypixels = struct.unpack('HHHH',
                                                 fcntl.ioctl(sys.stdout, termios.TIOCGWINSZ, s))
         fcntl.ioctl(self.ptyMfd, termios.TIOCSWINSZ,
                     struct.pack('HHHH', rows, cols, xpixels, ypixels))
 
-    def spawn_bash_terminal(self, command, asRoot=False):
-        """Spawn a bash terminal in a new PTY."""
+    def spawn_bash_terminal(self, command : str, asRoot : bool=False) -> int:
+        '''
+        Spawn a bash terminal in a new PTY.
+        '''
         # Open a new pseudo-terminal pair
         self.ptyMfd, self.ptySfd = pty.openpty()
 
@@ -1825,7 +1475,7 @@ class sessionManager:
             # Not 'perfect' to have all of the return from the users code here, but this works well
             return interactiveProc.returncode #pylint: disable=W0134,W0150
 
-    def runCommand(self, command, asRoot=False):
+    def runCommand(self, command : str, asRoot : bool=False) -> int:
         '''
         Run Said command inside the sandbox env
 
@@ -1907,7 +1557,7 @@ class sessionManager:
 
         return rc
 
-    def procState(self, pid):
+    def procState(self, pid : int) -> str:
         '''
         Return the state of a given PID in linux
         '''
@@ -1920,7 +1570,7 @@ class sessionManager:
         # Unknown
         return 'E'
 
-    def _shellFwdBck(self, interactiveProc, readable):
+    def _shellFwdBck(self, interactiveProc : subprocess.PIPE, readable : list) -> bool:
         '''
         This is the component for handling sending data in/out of the pty
         '''
@@ -1959,12 +1609,516 @@ class sessionManager:
             return False
 
 
+class sandboxFixes:
+    '''
+    Class to handle the fixes needed for the sandbox
+    '''
+
+    def __init__(self, addNV : bool, sandboxInstance : sessionManager, iManager : imageManager):
+        '''
+        '''
+
+        self.addNVidia = addNV
+        self.sandboxInstance = sandboxInstance
+        self.iManager = iManager
+
+        self.tmpPath = '/tmp'
+
+    def applyAllFixes(self) -> None:
+        '''
+        Apply all of the fixes to this sandbox
+        '''
+        self.fixFilePermissions()
+        self.fixAptSandboxing()
+        self.fixDnfSandboxing()
+        self.fixMissingPaths()
+        self.fixMissingStubs()
+        self.fixUserAccounts()
+        self.fixAliases()
+        self.fixEnvironment()
+        self.installAppBox()
+        self.copyFromHost()
+        self.fixForLies()
+        self.applyImageEnv()
+        self.stampSandbox()
+
+    def copyFromHost(self) -> None:
+        '''
+        Copy certain configs from the host to the sandbox so things work
+        '''
+
+        fileList = ['/etc/resolv.conf', '/etc/hostname',
+                    '/etc/localtime', '/etc/timezone', '/etc/vimrc']
+
+        for _file in fileList:
+            self.sandboxInstance.copyFileFromHost(_file,
+                    os.path.abspath(os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_file)))
+
+    def fixFilePermissions(self) -> None:
+        '''
+        Fix the permissions of a given path
+        '''
+        if self.sandboxInstance.rootfs:
+            return
+        for root, dirs, files in os.walk(self.sandboxInstance.getSandboxPath(), topdown=True):
+            for _dir in dirs:
+                thisPath = os.path.join(root,_dir)
+                if not os.path.islink(thisPath):
+                    current = stat.S_IMODE(os.lstat(thisPath).st_mode)
+                    os.chmod(thisPath, current | stat.S_IWUSR | stat.S_IRUSR | stat.S_ISGID)
+            for _file in files:
+                thisPath = os.path.join(root,_file)
+                if not os.path.islink(thisPath):
+                    current = stat.S_IMODE(os.lstat(thisPath).st_mode)
+                    os.chmod(os.path.join(root,_file), current | stat.S_IWUSR | stat.S_IRUSR)
+
+    def _getPathList(self) -> list:
+        '''
+        Return the list of paths we want to mount into the sandbox
+        '''
+        # This is a good fraction of the lsb because not all images follow the lsb...
+        # which means...
+        # well...
+        # yeah...
+        basePathList = ['/afs', '/dev', '/etc', '/cvmfs', '/scratch', '/Data', '/localdisk',
+                          '/sys', '/tmp', '/home', '/proc', f'/tmp/{getUN()}', '/mnt']
+
+        if self.addNVidia:
+            basePathList.append('/usr/lib/wsl')
+
+        return basePathList
+
+    def fixMissingPaths(self) -> None:
+        '''
+        Fix potentially missing paths in the sandbox
+        '''
+        neededSandboxPaths = self._getPathList()
+
+        absPaths = []
+        for _path in neededSandboxPaths:
+            absPaths.append(os.path.abspath(
+                        os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_path)))
+
+        for _path in absPaths:
+            self.sandboxInstance.createSandboxPath(_path)
+
+    def _getStubList(self) -> list:
+        '''
+        Make stubs for files to be mounted in from the host
+        '''
+        baseStubs = ['/etc/resolv.conf', '/etc/hostname']
+
+        if self.addNVidia:
+            baseStubs.append('/usr/bin/nvidia-smi')
+            baseStubs.append('/usr/bin/nvidia-modprobe')
+
+        return baseStubs
+
+    def fixMissingStubs(self) -> None:
+        '''
+        Create the stubs needed for the sandbox
+        '''
+        neededStubs = self._getStubList()
+
+        absPaths = []
+        for _path in neededStubs:
+            absPaths.append(os.path.abspath(
+                        os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_path)))
+
+        for _path in absPaths:
+            if not os.path.exists(_path):
+                self.sandboxInstance.createSandboxEmptyFile(_path)
+
+    def getAnonUIDGID(self) -> tuple:
+        '''
+        Return the Anon UID and GID for the sandbox
+        In principle this can change based on the system, but for now it's fixed
+        '''
+        # TODO work out if we need to detect/change this
+        return (65534, 65534)
+
+    def fixUserAccounts(self) -> None:
+        '''
+        Fix the user accounts within the sandbox
+        '''
+        tmpPasswdFile = os.path.join(self.tmpPath, f'passwd_{str(uuid.uuid4())[:8]}')
+        try:
+            self._fixPasswd(tmpPasswdFile)
+        finally:
+            os.unlink(tmpPasswdFile)
+        tmpGroupFile = os.path.join(self.tmpPath, f'group_{str(uuid.uuid4())[:8]}')
+        try:
+            self._fixGroup(tmpGroupFile)
+        finally:
+            os.unlink(tmpGroupFile)
+        tmpShadowFile = os.path.join(self.tmpPath, f'gshadow_{str(uuid.uuid4())[:8]}')
+        try:
+            self._fixGShadow(tmpShadowFile)
+        finally:
+            os.unlink(tmpShadowFile)
+
+    def _fixPasswd(self, tmpPasswdFile : str) -> None:
+        '''
+        Fix the passwd config so the user mappings make sense
+        '''
+        self.sandboxInstance.copyFileToHost('/etc/passwd', tmpPasswdFile)
+
+        with open(tmpPasswdFile, 'r', encoding='utf-8') as _file:
+            _content = _file.read()
+            appLogger.debug('File: "%s"', tmpPasswdFile)
+            appLogger.debug('Content: "%s"', _content)
+
+        newContent = 'root:x:0:0:root:/root:/bin/bash\n'
+        newContent += f'{getUN()}:x:65534:65534:{getUN()}:{getHome()}:/bin/bash\n'
+
+        aUID, aGID = self.getAnonUIDGID()
+
+        for _line in _content.split('\n'):
+            if _line:
+                _user, _, _uid, _gid, _name, _home, _shell = _line.split(':')
+                if _user in ['root', getUN(), 'fax', 'input', 'kvm', 'render']:
+                    continue
+                if _user.startswith('systemd'):
+                    # A dirty trick to keep apt 'content' on Ubuntu systems
+                    continue
+                appLogger.debug(
+                    'User: "%s", UID: "%s", GID: "%s", Name: "%s", Home: "%s", Shell: "%s"',
+                                    _user, _uid, _gid, _name, _home, _shell)
+
+                newContent += f'{_user}:x:{aUID}:{aGID}:{_name}:{_home}:{_shell}\n'
+
+        with open(tmpPasswdFile, 'w+', encoding='utf-8') as _file:
+            _file.write(newContent)
+
+        self.sandboxInstance.copyFileFromHost(tmpPasswdFile,
+                            os.path.join(self.sandboxInstance.getSandboxPath(), './etc/passwd'))
+
+    def _fixGroup(self, tmpGroupFile : str) -> None:
+        '''
+        Fix the group permissions so that mappings make sense
+        '''
+        self.sandboxInstance.copyFileToHost('/etc/group', tmpGroupFile)
+
+        with open(tmpGroupFile, 'r', encoding='utf-8') as _file:
+            _content = _file.read()
+            appLogger.debug('File: "%s"', tmpGroupFile)
+            appLogger.debug('Content: "%s"', _content)
+
+        _, aGID = self.getAnonUIDGID()
+
+        newContent = 'root:x:0:\n'
+        newContent += f'{getUN()}:x:{aGID}:\n'
+
+        for _line in _content.split('\n'):
+            if _line:
+                _group, _, _gid, _users = _line.split(':')
+                if _group in ['root', getUN(), 'fax', 'input', 'kvm', 'render']:
+                    continue
+                if _group.startswith('systemd'):
+                    # A dirty trick to keep apt 'content' on Ubuntu systems
+                    continue
+                appLogger.debug('Group: "%s", GID: "%s", Users: "%s"', _group, _gid, _users)
+
+                newContent += f'{_group}:x:{aGID}:{_users}\n'
+
+        with open(tmpGroupFile, 'w+', encoding='utf-8') as _file:
+            _file.write(newContent)
+
+        self.sandboxInstance.copyFileFromHost(tmpGroupFile,
+                                os.path.join(self.sandboxInstance.getSandboxPath(), './etc/group'))
+
+    def _fixGShadow(self, tmpShadowFile : str) -> None:
+        '''
+        This fixes the gshadow config, mainly for debian systems
+        '''
+        self.sandboxInstance.copyFileToHost('/etc/gshadow', tmpShadowFile)
+        with open(tmpShadowFile, 'r', encoding='utf-8') as _file:
+            _content = _file.read()
+            appLogger.debug('File: "%s"', tmpShadowFile)
+            appLogger.debug('Content: "%s"', _content)
+
+        newContent = ''
+
+        for _line in _content.split('\n'):
+            if _line:
+                _pass = True
+                for check in ['fax', 'voice', 'sudo', 'dip', 'operator', 'src',
+                              'shadow', 'sasl', 'plugdev', 'staff', 'nogroup']:
+                    if _line.startswith(check):
+                        _pass = False
+                        break
+                if not _pass:
+                    continue
+                newContent += _line + '\n'
+
+        with open(tmpShadowFile, 'w+', encoding='utf-8') as _file:
+            _file.write(newContent)
+
+        self.sandboxInstance.copyFileFromHost(tmpShadowFile,
+                            os.path.join(self.sandboxInstance.getSandboxPath(), './etc/gshadow'))
+
+    def fixAliases(self) -> None:
+        '''
+        Fix the aliases in the sandbox
+        '''
+
+        self.sandboxInstance.createSandboxPath(
+                    os.path.join(self.sandboxInstance.getSandboxPath(), './etc/profile.d'))
+
+        def fixDeactivate() -> None:
+            '''
+            Fix the deactivate script
+            '''
+            tmpDeacScript = os.path.join(self.tmpPath, f'deactivate_{str(uuid.uuid4())[:8]}')
+            with open(tmpDeacScript, 'w+', encoding='utf-8') as _file:
+                _file.write(
+                    '#!/bin/bash\nfor i in $(seq 100); do kill -s 1 ${i} 2>&1 | true ; done\n')
+            try:
+                st = os.stat(tmpDeacScript)
+                os.chmod(tmpDeacScript, st.st_mode | stat.S_IEXEC)
+                self.sandboxInstance.copyFileFromHost(tmpDeacScript,
+                        os.path.join(self.sandboxInstance.getSandboxPath(), './usr/bin/deactivate'))
+            finally:
+                os.unlink(tmpDeacScript)
+
+        fixDeactivate()
+
+    def fixEnvironment(self) -> None:
+        '''
+        Fix missing env vars at 'login' which includes wsl linkage
+        '''
+
+        if self.addNVidia:
+            self.sandboxInstance.createSandboxPath(
+                os.path.join(self.sandboxInstance.getSandboxPath(), './etc/ld.so.conf.d'))
+            tmpLDPath = os.path.join(self.tmpPath, f'ld.wsl.conf_{str(uuid.uuid4())[:8]}')
+            with open(tmpLDPath, 'w+', encoding='utf-8') as _file:
+                _file.write('/usr/lib/wsl/lib')
+            try:
+                self.sandboxInstance.copyFileFromHost(tmpLDPath,
+                    os.path.join(self.sandboxInstance.getSandboxPath(),
+                                 './etc/ld.so.conf.d/wsl.conf'))
+            finally:
+                os.unlink(tmpLDPath)
+
+        def setEnvVar(tmpENVFile : str) -> None:
+            '''
+            Build the env vars which we want to expose users to
+            '''
+
+            _home = getHome()
+            envs  = 'export DEBIAN_FRONTEND="noninteractive"\n'
+            envs += 'export TERM=xterm-256color\n'
+            envs += 'export HOME=$( [ $(id -u) -eq 0 ] && echo "/root" ||'
+            envs += f'echo "{_home}" )\n'
+            envs += f'export HOSTNAME={socket.gethostname()}\n'
+            envs += 'export DISPLAY=:0\n'
+            envs += 'export WAYLAND_DISPLAY=wayland-0\n'
+            envs += 'if [ $(id -u) -eq 0 ]; then USR_MSG="\033[1;31mAS ROOT\033[0m";'
+            envs += 'else USR_MSG="\033[32mas $(whoami)\033[0m"; fi\n'
+            envs += 'echo "\n Now Running \033[31m[\033[33ma\033[32mp'
+            envs += '\033[36mp\033[32mB\033[36mo\033[34mx\033[m]\033[0m ! '
+            envs += f'(sandbox based on image: \033[1;31m{self.iManager.userPath}\033[0m) '
+            envs += ' ${USR_MSG}\n"\n'
+            envs += '/usr/sbin/ldconfig\n'
+            with open(tmpENVFile, 'w+', encoding='utf-8') as _file:
+                _file.write(envs)
+            self.sandboxInstance.copyFileFromHost(tmpENVFile,
+                    os.path.join(self.sandboxInstance.getSandboxPath(), './etc/profile.d/env.sh'))
+
+        tmpENVFile = os.path.join(self.tmpPath, f'env.sh_{str(uuid.uuid4())[:8]}')
+        try:
+            setEnvVar(tmpENVFile)
+        finally:
+            os.unlink(tmpENVFile)
+
+    def fixAptSandboxing(self) -> None:
+        '''
+        Fix issues related to installing packages on Debian in a single-user-sandbox...
+        '''
+
+        appConfPath = os.path.join(self.sandboxInstance.getSandboxPath(), './etc/apt/apt.conf.d/')
+        self.sandboxInstance.createSandboxPath(appConfPath)
+
+        layerPath = os.path.join(self.sandboxInstance.sandboxPath, './etc/apt/apt.conf.d/')
+        if os.path.exists(layerPath):
+            # Only want to apply this 'fix' in sandboxes where apt is installed
+
+            fixApt  = 'APT::Sandbox::User "root";\nAPT::Sandbox::Verify "0";\n'
+            fixApt += 'APT::Sandbox::Verify::IDs "0";\nAPT::Sandbox::Verify::Groups "0";\n'
+            fixApt += 'APT::Sandbox::Verify::Regain "0";'
+
+            tmpSandbox = os.path.join(self.tmpPath, f'sandbox-disable_{str(uuid.uuid4())[:8]}')
+            with open(tmpSandbox, 'w+', encoding='utf-8') as _file:
+                _file.write(fixApt)
+
+            try:
+                self.sandboxInstance.copyFileFromHost(tmpSandbox, os.path.join(appConfPath,
+                                                                               '99appBox'))
+            finally:
+                os.unlink(tmpSandbox)
+
+            ## Hack of a hack...
+            ## cp /bin/true /usr/bin/dpkg-statoverride
+
+            shutil.copyfile(os.path.join(self.sandboxInstance.getSandboxPath(), 'bin/true'),
+                os.path.join(self.sandboxInstance.getSandboxPath(), 'usr/bin/dpkg-statoverride'))
+
+            shutil.copyfile(os.path.join(self.sandboxInstance.getSandboxPath(), 'bin/true'),
+                    os.path.join(self.sandboxInstance.getSandboxPath(), 'bin/dpkg-statoverride'))
+
+    def fixDnfSandboxing(self) -> None:
+        '''
+        Fix issues with Fedora sandboxing since we're now in a competition to do this...
+        '''
+
+        appConfPath = os.path.join(self.sandboxInstance.getSandboxPath(), './etc/dnf/')
+        self.sandboxInstance.createSandboxPath(appConfPath)
+
+        layerPath = os.path.join(self.sandboxInstance.sandboxPath, './etc/dnf/')
+        if os.path.exists(layerPath):
+            # Only want to apply this 'fix' in sandboxes where apt is installed
+
+            fixDNF  = '[main]\n'
+            fixDNF += 'gpgcheck=True\n'
+            fixDNF += 'installonly_limit=3\n'
+            fixDNF += 'clean_requirements_on_remove=True\n'
+            fixDNF += 'best=False\n'
+            fixDNF += 'skip_if_unavailable=True\n'
+            fixDNF += 'tsflags=nodocs\n'
+            fixDNF += 'excludepkgs=rpm-plugin-ima,ima-evm-utils\n' # <- the main fix(!)
+
+            tmpSandbox = os.path.join(self.tmpPath, f'dnf.conf_{str(uuid.uuid4())[:8]}')
+            with open(tmpSandbox, 'w+', encoding='utf-8') as _file:
+                _file.write(fixDNF)
+
+            try:
+                self.sandboxInstance.copyFileFromHost(tmpSandbox, os.path.join(appConfPath,
+                                                                               'dnf.conf'))
+            finally:
+                os.unlink(tmpSandbox)
+
+    def installAppBox(self) -> None:
+        '''
+        Install the appBox tool into the sandbox
+        '''
+
+        currentInstance = os.path.abspath(__file__)
+        if not os.path.exists(os.path.join(self.sandboxInstance.sandboxPath, './bin')):
+            os.makedirs(os.path.join(self.sandboxInstance.sandboxPath, './bin'))
+        installInstance = os.path.join(self.sandboxInstance.sandboxPath, './bin/appBox')
+
+        self.sandboxInstance.copyFileFromHost(currentInstance, installInstance, overwrite=True)
+
+        cvmfsArgs = ''
+        if self.sandboxInstance.rootfs:
+            cvmfsArgs = f'-cvmfs {os.path.abspath(self.sandboxInstance.rootfs)}'
+
+        for _ in ['user', 'root']:
+            if _ == 'root':
+                asString = '-rcr "${cmd}"'
+                scriptName = 'activate-asroot'
+            else:
+                asString = '-rc "${cmd}"'
+                scriptName = 'activate'
+
+            activateScript = """#!/bin/bash
+
+SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
+
+if [ "$#" -eq 0 ]; then
+  cmd="env -i /bin/bash -l "
+else
+  cmd="$*"
+fi
+
+/bin/env python3 ${SCRIPT_DIR}/appBox """
+            activateScript = activateScript + cvmfsArgs
+            activateScript = activateScript + " -l ${SCRIPT_DIR}/../ " + asString
+
+            activatePath = os.path.join(self.sandboxInstance.sandboxPath, f'./bin/{scriptName}')
+            with open(activatePath, 'w+', encoding='utf-8') as _file:
+                _file.write(activateScript)
+
+            for _file in [installInstance, activatePath, ]:
+                st = os.stat(_file)
+                os.chmod(_file, st.st_mode | stat.S_IEXEC)
+
+    def fixForLies(self) -> None:
+        '''
+        Override some commands to stop people doing bad things by accident,
+        or on-purpose to themselves
+        '''
+
+        ## T O D O decide if this is a bad idea or not...
+        ## Intention here is to 'stop' automated tooling from trying to do something
+        ## bad within the sandbox. This has the side-effect of stopping people changing
+        ## a file so that they can't so anything with it without magic cmdline-fu (d'oh!)
+        ## Also provides some safety over apt/rpm scripts calling these when people
+        ## install packages themselves...
+        ## Remember: "You're a user Harry..."
+
+        for _file in ['/usr/bin/chown', '/bin/chown',
+                      '/usr/bin/su', '/bin/su', '/usr/bin/sudo', '/bin/sudo']:
+            self.sandboxInstance.copyFileFromHost(
+                            os.path.join(self.sandboxInstance.getSandboxPath(), 'bin/true'),
+                            os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_file))
+            self.sandboxInstance.copyFileFromHost(
+                            os.path.join(self.sandboxInstance.getSandboxPath(), 'bin/true'),
+                            os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_file))
+
+    def applyImageEnv(self) -> None:
+        '''
+        Apply the environment variables from the image to the sandbox
+        '''
+
+        thisConfig = self.iManager.getConfig()
+
+        all_envs = ""
+        for _env in thisConfig['config']['Env']:
+
+            appLogger.debug('Setting Environment %s', _env)
+            k, v = _env.split('=')
+            all_envs += f"export {k}=\"{v}\"\n"
+
+        all_envs += 'alias deactivate=/bin/deactivate\n'
+
+        tmpENVFile = os.path.join(self.tmpPath, f'env.sh_{str(uuid.uuid4())[:8]}')
+        with open(tmpENVFile, 'w+', encoding='utf-8') as _file:
+            _file.write(all_envs)
+        try:
+            self.sandboxInstance.copyFileFromHost(tmpENVFile,
+                    os.path.join(self.sandboxInstance.getSandboxPath(),
+                                 './etc/profile.d/imageEnv.sh'))
+        finally:
+            os.unlink(tmpENVFile)
+
+    def stampSandbox(self) -> None:
+        '''
+        Stamp the sandbox with the details of the image
+        '''
+
+        stampFile = os.path.join(self.sandboxInstance.getSandboxPath(), '.appBox')
+
+        appBoxData = {}
+        appBoxData['version'] = appBoxVersion
+        appBoxData['image'] = self.iManager.userPath
+        appBoxData['createTime'] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        appBoxData['originalSandboxPath'] = self.sandboxInstance.getSandboxPath()
+        appBoxData['originalUser'] = getUN()
+        appBoxData['originalUIDGID'] = f"{os.getuid()}:{os.getgid()}"
+
+
+        with open(stampFile, 'w', encoding='utf-8') as _file:
+            _file.write(json.dumps(appBoxData, indent=4))
+
+
 class appBoxManager:
     '''
     Class for general helper functions
     '''
 
-    def setLogLevel(self, level):
+    def setLogLevel(self, level : int) -> None:
         '''
         Set the log level of the global logger
         '''
@@ -1998,7 +2152,7 @@ class cmdLineParser:
     '''
 
     @staticmethod
-    def getArgsParser():
+    def getArgsParser() -> argparse.ArgumentParser:
         '''
         Parse the Args passed to this instance
         '''
@@ -2133,8 +2287,9 @@ RH7>
         return parser
 
 
-def runCommand(iManager, sandboxPath, command, asRoot,
-               compatV1=False, addNV=False, rootfs=None, runCMD=True):
+def runCommand(iManager : imageManager, sandboxPath : str, command : str, asRoot : bool,
+               compatV1 : bool=False, addNV : bool=False, rootfs : str='',
+               runCMD : bool=True) -> int:
     '''
     Run a command within a sandbox
     '''
@@ -2171,7 +2326,7 @@ def runCommand(iManager, sandboxPath, command, asRoot,
         thisSandbox.cleanupSpaces()
 
 
-def main():
+def main() -> None:
     '''
     Main :) Hello
     '''
@@ -2294,7 +2449,7 @@ def main():
         ## Add some way of handling images from other sources
         ## This should identify docker images from docker://
         ## This will probably involve adding additional classes for Quay, Singularity, etc.
-        ## Can safely default to assume most users just want a docker image
+        ## Can safely default to assume **most** users want a docker image from dockerhub/gitlab
 
 
         imageLower = wantedImage.lower()
@@ -2315,11 +2470,13 @@ def main():
             else:
                 rc = iManager.extractImage()
             if rc != 0:
+                appLogger.error('Failed to extract image: "%s"', wantedImage)
                 return rc
             runCMD=False
             rc = runCommand(iManager, wantedDest, commandToRun, asRoot, compatV1,
                             addNV, lowerLayer, runCMD)
             if rc != 0:
+                appLogger.debug('Command failed with RC: %s', rc)
                 return rc
 
         except PermissionError as permissionErr:
@@ -2362,7 +2519,7 @@ if __name__ == '__main__':
         if appLogger:
             appLogger.error('Aborting due to user request.')
             if appLogger.level == logging.DEBUG:
-                print(keyboardErr)
+                appLogger.debug(keyboardErr)
         else:
             print('Aborting due to user request.')
         sys.exit(129)
