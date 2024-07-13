@@ -2149,7 +2149,7 @@ class sandboxFixes:
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 if [ "$#" -eq 0 ]; then
-  cmd="env -i /bin/bash -l "
+  cmd="env -i /bin/bash "
 else
   cmd="$*"
 fi
