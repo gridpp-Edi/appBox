@@ -17,6 +17,12 @@
 </p>
 </pre>
 
+# Appbox: Run Anything, Anywhere - Empowering Users!
+
+<pre>./appBox -ii almalinux:9 -ip ./AlmaLinux9
+source ./AlmaLinux9/bin/activate
+</pre>
+
 # About
 
 AppBox was written to address the following problems:

@@ -69,6 +69,7 @@ appBoxVersion = __version__
 # Global Logger(s)
 appLogger = logging.getLogger('appBox')
 barLogger = logging.getLogger('barLogger')
+bgColour = '\033[1;32m'
 
 
 class OneLineProgressHandler(logging.StreamHandler):
@@ -444,7 +445,7 @@ class imageManager:
         if os.path.exists(manCache):
             with open(manCache, 'r', encoding="utf-8") as _file:
                 contents = json.loads(_file.read())
-                appLogger.debug('Manifest Cache: %s', contents)
+                #appLogger.debug('Manifest Cache: %s', contents)
 
             if manifestVer in contents:
                 return contents[manifestVer]
@@ -460,6 +461,29 @@ class imageManager:
             _file.write(json.dumps(contents))
 
         return contents[manifestVer]
+
+    def cacheManifest(self, path: str) -> None:
+        '''
+        Cache the manifest for the image at a given path
+        '''
+        cachePath = os.path.join(path, self.imgHash)
+        if os.path.exists(cachePath):
+            return
+
+        with open(cachePath, 'w', encoding="utf-8") as _file:
+            _file.write(self.getManifest())
+
+    def cacheConfig(self, path: str) -> None:
+        '''
+        Cache the config for the image at a given path
+        '''
+        _, digest = self.getConfigHash()
+        cachePath = os.path.join(path, digest)
+        if os.path.exists(cachePath):
+            return
+
+        with open(cachePath, 'w', encoding="utf-8") as _file:
+            _file.write(json.dumps(self.getConfig()))
 
     @tokenRequired
     def getRemoteManifest(self, manifestVer : str='') -> str:
@@ -693,7 +717,7 @@ class imageManager:
 
         ## '.layers[0]' | jq -r '.digest'
         ## Read the digest from the layers and return
-        appLogger.debug('Manifest: %s', manifest)
+        #appLogger.debug('Manifest: %s', manifest)
 
         if 'errors' in manifest:
             errs = manifest['errors']
@@ -727,26 +751,34 @@ class imageManager:
         #raise Exception('here')
         return digestList, thisConfig
 
-    def getConfig(self) -> dict:
+    def getConfigHash(self) -> str:
         '''
-        Get the config for the image
+        Get the hash for the config
         '''
-
         imageManifest = self.getManifest()
         _, digest = self.getDigest(json.loads(imageManifest))
 
         appLogger.debug('Config: %s', digest)
 
+        configPath = self.getLayerFileName(digest)[:-7]
+
+        return configPath, digest
+
+    def getConfig(self) -> dict:
+        '''
+        Get the config for the image
+        '''
+
         _content = {}
 
-        configPath = self.getLayerFileName(digest)[:-7]
+        configPath, digest = self.getConfigHash()
 
         if not os.path.exists(configPath):
             self._downloadConfig(digest)
 
         with open(configPath, 'r', encoding="utf-8") as _file:
             _content = json.loads(_file.read())
-            appLogger.debug('Config Content: %s', _content)
+            #appLogger.debug('Config Content: %s', _content)
 
         appLogger.debug('Container ENV: %s', _content['config']['Env'])
 
@@ -817,21 +849,28 @@ class imageManager:
         Extract the layers for the image
         '''
 
-        for layer in self.downloadImage():
+        layer_i=0
+        images = self.downloadImage()
+        img_num = len(images)
+        for layer in images:
+            layer_i+=1
 
             layerFile = self.getLayerFileName(layer['digest'])
 
             layerSize = os.path.getsize(layerFile)
-            appLogger.info('Opening Layer: %s (%s)', layerFile, bytesToHuman(layerSize))
+            appLogger.info('Opening Layer (%s/%s): %s (%s)',
+                           layer_i, img_num, layerFile, bytesToHuman(layerSize))
 
             with tarfile.open(layerFile, 'r:gz', errorlevel=1) as _tfile:
 
+                #appLogger.debug('Counting...')
                 total=0
                 for _entry in _tfile:
                     total+=1
                 appLogger.info('#%s Files/Folders', total)
                 if total == 0:
-                    break
+                    continue
+                #total = layerSize
 
                 printBar(0, total, prefix = 'Extracting:', suffix = 'Complete', length = 50)
                 i=0
@@ -846,17 +885,26 @@ class imageManager:
                     if _entry.isdir():
                         os.makedirs(os.path.join(installPath, _entry.name), exist_ok=True)
                     else:
+                        # Check if we're overwriting a file
                         if os.path.exists(os.path.join(installPath, _entry.name)):
                             os.remove(os.path.join(installPath, _entry.name))
+
+                        # Check path exists before extracting
                         parent = os.path.dirname(os.path.join(installPath, _entry.name))
                         os.makedirs(os.path.join(installPath, parent), exist_ok=True)
+
+                        # Handle permissions
                         if not (_entry.issym() or _entry.islnk()):
                             current = stat.S_IMODE(os.lstat(parent).st_mode)
                             os.chmod(parent, current | stat.S_IWUSR | stat.S_IRUSR | stat.S_ISGID)
+
+                        # Handle python security issues
                         try:
                             _tfile.extract(_entry, path=installPath, filter='fully_trusted')
                         except TypeError:
                             _tfile.extract(_entry, path=installPath)
+
+                        # Handle permissions again after extraction
                         if not (_entry.issym() or _entry.islnk()):
                             output = os.path.join(installPath, _entry.name)
                             current = stat.S_IMODE(os.lstat(output).st_mode)
@@ -899,10 +947,10 @@ class sessionManager:
         '''
         if self.rootfs:
             rootFS = os.path.join(self.sandboxPath, '._appBoxLayers/overlay')
-            appLogger.debug('Sandbox Path: %s', rootFS)
+            #appLogger.debug('Sandbox Path: %s', rootFS)
             return rootFS
         else:
-            appLogger.debug('Sandbox Path: %s', self.sandboxPath)
+            #appLogger.debug('Sandbox Path: %s', self.sandboxPath)
             return self.sandboxPath
 
     def setraw(self, fd : str, when : int=termios.TCSAFLUSH) -> None:
@@ -980,7 +1028,7 @@ class sessionManager:
 
         appLogger.debug('Host sandbox namespace: %s', self.proc.pid)
         self.pidParent=self.proc.pid
-        time.sleep(0.1)
+        time.sleep(0.05)
 
         parentID = self.pidParent
         childID = parentID
@@ -994,7 +1042,7 @@ class sessionManager:
             except (OSError, ValueError) as pidErr:
                 appLogger.debug('Error: %s', pidErr)
                 break
-            time.sleep(0.1)
+            time.sleep(0.05)
 
             appLogger.debug('---')
 
@@ -1068,10 +1116,38 @@ class sessionManager:
             appLogger.error('Failed to Copy File: %s -> %s', hostFile, sandboxFile)
             raise IOError('Failed to Copy File')
 
+    def removeFromSandBox(self, path : str) -> None:
+        '''
+        Remove a file from the sandbox
+        '''
+
+        removeCMD = f'rm -rf {path}'
+        appLogger.debug('nsenter --preserve-credentials --user --mount --pid -t %s %s',
+                            self.pidChild, removeCMD)
+
+        removeProc = subprocess.Popen(
+            f'nsenter --preserve-credentials --user --mount --pid -t {self.pidChild} {removeCMD}',
+                        stdin = subprocess.PIPE,
+                        stdout = subprocess.PIPE,
+                        stderr = subprocess.PIPE,
+                        shell=True)
+
+        removeProc.wait()
+        removeRC = removeProc.poll()
+        appLogger.debug('Remove RC: %s', removeProc.poll())
+        del removeProc
+
+        if removeRC != 0:
+            appLogger.error('Failed to Remove Path: %s', path)
+            raise IOError('Failed to Remove Path')
+
     def createSandboxPath(self, path : str, overridePID : int=-1) -> None:
         '''
         Create a new path within the sandbox
         '''
+        if os.path.isdir(path):
+            appLogger.debug('Path already exists: %s', path)
+            return
         pidSpace = self.pidChild
         if overridePID > 0:
             pidSpace = overridePID
@@ -1194,6 +1270,11 @@ class sessionManager:
             appLogger.debug('MountHost RC: %s', mountProc.poll())
             del mountProc
 
+            if mountRC == 32:
+                appLogger.warning('Failed to Mount Host Path: %s as %s', hostPath, sandboxPath)
+                appLogger.warning('Continuing...')
+                continue
+
             if mountRC != 0:
                 appLogger.error('Failed to Mount Host Path: %s as %s', hostPath, sandboxPath)
                 raise IOError('Failed to Mount Host Path')
@@ -1274,7 +1355,7 @@ class sessionManager:
 
         self.pidSubParent=self.proc2.pid
 
-        time.sleep(0.1)
+        time.sleep(0.05)
 
         with open(f'/proc/{self.pidSubParent}/task/{self.pidSubParent}/children',
                   'r', encoding='utf-8') as _file:
@@ -1297,7 +1378,7 @@ class sessionManager:
             else:
                 commandPath = os.path.join(self.sandboxPath, 'bin/bash')
             if os.path.exists(commandPath):
-                command = 'env -i /bin/bash -c "sleep 1; env -i /bin/bash'
+                command = 'env -i /bin/bash -l -c "true; env -i /bin/bash'
                 command += ' --rcfile /etc/profile -l; exit $?"'
             else:
                 command = 'env -i /bin/sh'
@@ -1305,11 +1386,11 @@ class sessionManager:
             if not self.compatV1:
                 commandPath = os.path.join(self.sandboxPath, 'bin/bash')
                 if os.path.exists(commandPath):
-                    command = f'env -i /bin/bash --rcfile /etc/profile -c "sleep 1; {command}" '
+                    command = f'env -i /bin/bash --rcfile /etc/profile -l -c "true; {command}" '
                 else:
                     pass
             else:
-                command = f'env -i /bin/bash --rcfile /etc/profile -c \'sleep 1; {command}\''
+                command = f'env -i /bin/bash --rcfile /etc/profile -l -c \'true; {command}\''
         #command = '/bin/bash -l'
 
         if not self.compatV1:
@@ -1506,8 +1587,8 @@ class sessionManager:
         timeLimit=100
 
         while i<= timeLimit:
-            time.sleep(0.1)  # Total 10s chance for child to spawn on a healthy system
-            i=i+1            # Obviously 10s+work-time, but I'm assuming accessing proc is cheap
+            time.sleep(0.05)  # Total 5s chance for child to spawn on a healthy system
+            i=i+1             # Obviously 5s+work-time, but I'm assuming accessing proc is cheap
 
             parentID = interactiveProc.pid
             childID = parentID
@@ -1529,7 +1610,7 @@ class sessionManager:
                 except (OSError, ValueError) as pidErr:
                     appLogger.debug('Error: %s', pidErr)
                     break
-                time.sleep(0.1)
+                time.sleep(0.05)
 
                 appLogger.debug('---')
 
@@ -1628,18 +1709,33 @@ class sandboxFixes:
         '''
         Apply all of the fixes to this sandbox
         '''
+        appLogger.debug('Applying Permission Fixes')
         self.fixFilePermissions()
+        appLogger.debug('Applying Apt Fixes')
         self.fixAptSandboxing()
+        appLogger.debug('Applying DNF Fixes')
         self.fixDnfSandboxing()
+        appLogger.debug('Fixing Missing Paths')
         self.fixMissingPaths()
+        appLogger.debug('Fixing Missing Stubs')
         self.fixMissingStubs()
+        appLogger.debug('Fixing User Accounts')
         self.fixUserAccounts()
+        appLogger.debug('Fixing Aliases')
         self.fixAliases()
+        appLogger.debug('Fixing Environment')
         self.fixEnvironment()
+        appLogger.debug('Installing AppBox')
         self.installAppBox()
+        appLogger.debug('Copying from Host')
         self.copyFromHost()
+        appLogger.debug('Fixing bad tools')
         self.fixForLies()
+        appLogger.debug('Fixing missing Env')
         self.applyImageEnv()
+        appLogger.debug('Cache Manifest within sandbox')
+        self.cacheManifest()
+        appLogger.debug('Installing sandbox data')
         self.stampSandbox()
 
     def copyFromHost(self) -> None:
@@ -1651,6 +1747,11 @@ class sandboxFixes:
                     '/etc/localtime', '/etc/timezone', '/etc/vimrc']
 
         for _file in fileList:
+            if not os.path.exists(_file):
+                appLogger.debug('Skipping: %s', _file)
+                continue
+            self.sandboxInstance.removeFromSandBox(
+                os.path.abspath(os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_file)))
             self.sandboxInstance.copyFileFromHost(_file,
                     os.path.abspath(os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_file)))
 
@@ -1658,6 +1759,11 @@ class sandboxFixes:
         '''
         Fix the permissions of a given path
         '''
+
+        stampFile = os.path.join(self.sandboxInstance.getSandboxPath(), '.appBox')
+        if os.path.exists(stampFile):
+            return
+
         if self.sandboxInstance.rootfs:
             return
         for root, dirs, files in os.walk(self.sandboxInstance.getSandboxPath(), topdown=True):
@@ -1706,7 +1812,7 @@ class sandboxFixes:
         '''
         Make stubs for files to be mounted in from the host
         '''
-        baseStubs = ['/etc/resolv.conf', '/etc/hostname']
+        baseStubs = ['/etc/resolv.conf', '/etc/hostname', ]
 
         if self.addNVidia:
             baseStubs.append('/usr/bin/nvidia-smi')
@@ -1877,11 +1983,22 @@ class sandboxFixes:
                 st = os.stat(tmpDeacScript)
                 os.chmod(tmpDeacScript, st.st_mode | stat.S_IEXEC)
                 self.sandboxInstance.copyFileFromHost(tmpDeacScript,
-                        os.path.join(self.sandboxInstance.getSandboxPath(), './usr/bin/deactivate'))
+                        os.path.join(self.sandboxInstance.getSandboxPath(), './bin/deactivate'))
             finally:
                 os.unlink(tmpDeacScript)
 
         fixDeactivate()
+
+    def cacheManifest(self) -> None:
+        '''
+        Caching the manifest at the time that this sandbox was created
+        '''
+        cachePath = os.path.join(self.sandboxInstance.getSandboxPath(), '.cache')
+        os.makedirs(cachePath, exist_ok=True)
+        appLogger.debug('Caching Manifest at: %s', cachePath)
+        self.iManager.cacheManifest(cachePath)
+        appLogger.debug('Caching Config at: %s', cachePath)
+        self.iManager.cacheConfig(cachePath)
 
     def fixEnvironment(self) -> None:
         '''
@@ -1907,7 +2024,8 @@ class sandboxFixes:
             '''
 
             _home = getHome()
-            envs  = 'export DEBIAN_FRONTEND="noninteractive"\n'
+            envs  = 'export PATH="${PATH}:/"\n'
+            envs += 'export DEBIAN_FRONTEND="noninteractive"\n'
             envs += 'export TERM=xterm-256color\n'
             envs += 'export HOME=$( [ $(id -u) -eq 0 ] && echo "/root" ||'
             envs += f'echo "{_home}" )\n'
@@ -1916,15 +2034,16 @@ class sandboxFixes:
             envs += 'export WAYLAND_DISPLAY=wayland-0\n'
             envs += 'if [ $(id -u) -eq 0 ]; then USR_MSG="\033[1;31mAS ROOT\033[0m";'
             envs += 'else USR_MSG="\033[32mas $(whoami)\033[0m"; fi\n'
-            envs += 'echo "\n Now Running \033[31m[\033[33ma\033[32mp'
-            envs += '\033[36mp\033[32mB\033[36mo\033[34mx\033[m]\033[0m ! '
+            envs += 'echo " Now Running \033[31m[\033[33ma\033[32mp'
+            envs += '\033[36mp\033[32mB\033[36mo\033[34mx\033[m\033[35m]\033[0m ! '
             envs += f'(sandbox based on image: \033[1;31m{self.iManager.userPath}\033[0m) '
             envs += ' ${USR_MSG}\n"\n'
             envs += '/usr/sbin/ldconfig\n'
             with open(tmpENVFile, 'w+', encoding='utf-8') as _file:
                 _file.write(envs)
             self.sandboxInstance.copyFileFromHost(tmpENVFile,
-                    os.path.join(self.sandboxInstance.getSandboxPath(), './etc/profile.d/env.sh'))
+                    os.path.join(self.sandboxInstance.getSandboxPath(),
+                                 './etc/profile.d/zz_appBoxEnv.sh'))
 
         tmpENVFile = os.path.join(self.tmpPath, f'env.sh_{str(uuid.uuid4())[:8]}')
         try:
@@ -2014,13 +2133,16 @@ class sandboxFixes:
         if self.sandboxInstance.rootfs:
             cvmfsArgs = f'-cvmfs {os.path.abspath(self.sandboxInstance.rootfs)}'
 
-        for _ in ['user', 'root']:
+        for _ in ['user', 'root', 'debug']:
             if _ == 'root':
                 asString = '-rcr "${cmd}"'
-                scriptName = 'activate-asroot'
-            else:
+                scriptName = 'bin/activate-asroot'
+            elif _ == 'user':
                 asString = '-rc "${cmd}"'
-                scriptName = 'activate'
+                scriptName = 'bin/activate'
+            else:
+                asString = '-d -rc "${cmd}"'
+                scriptName = 'bin/activate-debug'
 
             activateScript = """#!/bin/bash
 
@@ -2033,10 +2155,11 @@ else
 fi
 
 /bin/env python3 ${SCRIPT_DIR}/appBox """
-            activateScript = activateScript + cvmfsArgs
-            activateScript = activateScript + " -l ${SCRIPT_DIR}/../ " + asString
+            activateScript  = activateScript + cvmfsArgs
+            activateScript += " -l ${SCRIPT_DIR}/.."
+            activateScript += " -layerCache ${SCRIPT_DIR}/../.cache/ " + asString
 
-            activatePath = os.path.join(self.sandboxInstance.sandboxPath, f'./bin/{scriptName}')
+            activatePath = os.path.join(self.sandboxInstance.sandboxPath, f'./{scriptName}')
             with open(activatePath, 'w+', encoding='utf-8') as _file:
                 _file.write(activateScript)
 
@@ -2069,6 +2192,41 @@ fi
 
     def applyImageEnv(self) -> None:
         '''
+        Construct the image env as defined in the manifest config
+        '''
+
+        self._implicitImageEnv()
+        self._explicitImageEnv()
+
+    def _implicitImageEnv(self) -> None:
+        '''
+        Sometimes image makers are lazy and don't set the environment variables
+        Do it for them...
+        '''
+
+        thisConfig = self.iManager.getConfig()
+
+        implicit_env = ""
+
+        for _step in thisConfig['history']:
+            if _step['created_by']:
+                if _step['created_by'].startswith('ARG'):
+                    _env = _step['created_by'][4:]
+                    appLogger.debug('Setting Environment %s', _env)
+                    implicit_env += f"export \"{_env}\"\n"
+
+        tmpENVFile = os.path.join(self.tmpPath, f'env.sh_{str(uuid.uuid4())[:8]}')
+        with open(tmpENVFile, 'w+', encoding='utf-8') as _file:
+            _file.write(implicit_env)
+        try:
+            self.sandboxInstance.copyFileFromHost(tmpENVFile,
+                    os.path.join(self.sandboxInstance.getSandboxPath(),
+                                 './etc/profile.d/imageEnv01.sh'))
+        finally:
+            os.unlink(tmpENVFile)
+
+    def _explicitImageEnv(self) -> None:
+        '''
         Apply the environment variables from the image to the sandbox
         '''
 
@@ -2078,8 +2236,7 @@ fi
         for _env in thisConfig['config']['Env']:
 
             appLogger.debug('Setting Environment %s', _env)
-            k, v = _env.split('=')
-            all_envs += f"export {k}=\"{v}\"\n"
+            all_envs += f"export \"{_env}\"\n"
 
         all_envs += 'alias deactivate=/bin/deactivate\n'
 
@@ -2089,7 +2246,7 @@ fi
         try:
             self.sandboxInstance.copyFileFromHost(tmpENVFile,
                     os.path.join(self.sandboxInstance.getSandboxPath(),
-                                 './etc/profile.d/imageEnv.sh'))
+                                 './etc/profile.d/imageEnv02.sh'))
         finally:
             os.unlink(tmpENVFile)
 
@@ -2099,6 +2256,8 @@ fi
         '''
 
         stampFile = os.path.join(self.sandboxInstance.getSandboxPath(), '.appBox')
+        if os.path.exists(stampFile):
+            return
 
         appBoxData = {}
         appBoxData['version'] = appBoxVersion
@@ -2107,7 +2266,6 @@ fi
         appBoxData['originalSandboxPath'] = self.sandboxInstance.getSandboxPath()
         appBoxData['originalUser'] = getUN()
         appBoxData['originalUIDGID'] = f"{os.getuid()}:{os.getgid()}"
-
 
         with open(stampFile, 'w', encoding='utf-8') as _file:
             _file.write(json.dumps(appBoxData, indent=4))
@@ -2127,7 +2285,7 @@ class appBoxManager:
         console_handler.setLevel(level)
         if level == logging.DEBUG:
             console_formatter = logging.Formatter(
-                "%(asctime)s;%(levelname)s: %(message)s", "%Y-%m-%d %H:%M:%S")
+            "\033[1;32m%(asctime)s.%(msecs)03d';%(levelname)s: %(message)s", "%Y-%m-%d %H:%M:%S")
         else:
             console_formatter = logging.Formatter('%(message)s')
         console_handler.setFormatter(console_formatter)
@@ -2138,7 +2296,7 @@ class appBoxManager:
 
         # Set up logging with the custom handler
         handler = OneLineProgressHandler(sys.stdout)
-        formatter = logging.Formatter('%(message)s')  # Simple message output
+        formatter = logging.Formatter('\033[1;32m%(message)s')  # Simple message output
         handler.setFormatter(formatter)
         barLogger.setLevel(level)
         barLogger.addHandler(handler)  # Replace default handlers with our custom handler
@@ -2310,8 +2468,10 @@ def runCommand(iManager : imageManager, sandboxPath : str, command : str, asRoot
         theseFixes.applyAllFixes()
 
         if runCMD:
+            appLogger.debug('Running Command: %s', command)
             rc = thisSandbox.spawn_bash_terminal(command, asRoot)
         else:
+            appLogger.debug('Just Returning, Huzzah!')
             rc = 0
 
         return rc
@@ -2341,11 +2501,6 @@ def main() -> None:
         appBoxManager().setLogLevel(logging.DEBUG)
     else:
         appBoxManager().setLogLevel(logging.INFO)
-
-    appLogger.debug('')
-    appLogger.debug('Debugging Enabled. Jolan tru.')
-    appLogger.debug('')
-
 
     commandToRun = None
     asRoot = False
@@ -2405,6 +2560,17 @@ def main() -> None:
     #    #sys.exit(-200)
 
 
+    if not (shouldRun or commandToRun):
+        # Lets change the output colour ;) (Green)
+        msg  = '\033[31m[\033[1;33mA\033[1;32mp\033[1;36mp'
+        msg += f'\033[1;32mB\033[1;36mo\033[1;34mx\033[1;35m]{bgColour}: '
+        msg += f'\033[1;30m{__version__}{bgColour}'
+        appLogger.info(msg)
+
+    appLogger.debug('')
+    appLogger.debug('Debugging Enabled. Jolan tru.')
+    appLogger.debug('')
+
     def platformDetection():
         platStr = platform.platform()
         detected = False
@@ -2430,17 +2596,19 @@ def main() -> None:
         shouldRun = True
 
     if not os.path.exists(wantedDest):
-        appLogger.info('Sandbox: "%s" does not exist.', wantedDest)
+        msg = f'Sandbox: \033[1;34m"{wantedDest}"{bgColour} does not exist.'
+        appLogger.info(msg)
         if not lowerLayer:
             if wantedImage is None:
                 appLogger.error('Please install before trying to launch a sandbox.')
                 sys.exit(132)
-            appLogger.info('Installing: "%s" at "%s"', wantedImage, wantedDest)
+            msg  = f'{bgColour}Installing: \033[1;33m"{wantedImage}"{bgColour}'
+            msg += f' at \033[1;34m"{wantedDest}"{bgColour}'
+            appLogger.info(msg)
             needToInstall = True
         else:
             appLogger.info('Using CVMFS: "%s"', lowerLayer)
             needToInstall = False
-
 
     rc = 0
     if needToInstall and not lowerLayer and wantedImage:
@@ -2478,6 +2646,12 @@ def main() -> None:
             if rc != 0:
                 appLogger.debug('Command failed with RC: %s', rc)
                 return rc
+            if not commandToRun and not shouldRun:
+                msg  = f'Image: \033[1;33m"{wantedImage}"{bgColour}'
+                msg += f' installed at: \033[1;34m"{wantedDest}"{bgColour}\n\n'
+                msg += 'To launch this sandbox, use:\n'
+                msg += f'\t\t\t\t\033[1;31m"source {wantedDest}/bin/activate"{bgColour}'
+                appLogger.info(msg)
 
         except PermissionError as permissionErr:
             appLogger.error('Permission Denied.')
@@ -2499,6 +2673,9 @@ def main() -> None:
 
         imageData = json.loads(_content)
         appLogger.debug('Sandbox Data: %s', imageData)
+
+        if not layerCache:
+            layerCache = os.path.join(wantedDest, '.cache')
 
         iManager = imageManager(imageData['image'], wantedDest, layerCache, forceUpdate)
 
