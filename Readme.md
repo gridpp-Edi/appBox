@@ -4,20 +4,8 @@
 </p>
 
 # AppBox; Installing a container as a virtualenv.
+## Running Anything, Anywhere - Empowering Users!
 <br>
-
-<pre>
-<p align='center'>
-  █████╗ ██████╗ ██████╗ ██████╗  ██████╗ ██╗  ██╗
- ██╔══██╗██╔══██╗██╔══██╗██╔══██╗██╔═══██╗╚██╗██╔╝
- ███████║██████╔╝██████╔╝██████╔╝██║   ██║ ╚███╔╝ 
- ██╔══██║██╔═══╝ ██╔═══╝ ██╔══██╗██║   ██║ ██╔██╗ 
- ██║  ██║██║     ██║     ██████╔╝╚██████╔╝██╔╝ ██╗
- ╚═╝  ╚═╝╚═╝     ╚═╝     ╚═════╝  ╚═════╝ ╚═╝  ╚═╝
-</p>
-</pre>
-
-# Appbox: Run Anything, Anywhere - Empowering Users!
 
 <pre>./appBox -ii almalinux:9 -ip ./AlmaLinux9
 
