@@ -186,7 +186,20 @@ class downloadTokenAuthenticator:
         conn = http.client.HTTPSConnection(remoteHost,
                                            port=parsedURL.port if parsedURL.port else 443)
         appLogger.debug("Querying Authn Service: %s", self.manifestPath)
-        conn.request("GET", self.manifestPath)
+
+        i = 0
+        while i < 3:
+            try:
+                i += 1
+                conn.request("GET", self.manifestPath)
+                break
+            except socket.gaierror as err:
+                appLogger.error('Failed to connect to: %s', remoteHost)
+                appLogger.error('Error: %s', err)
+                if i == 2:
+                    raise ConnectionError(f'Failed to connect to: "{remoteHost}"')
+                #raise ConnectionError(f'Failed to connect to: "{remoteHost}"')
+
         response = conn.getresponse()
         if response.status == 401:
             authHeader = response.getheader('www-authenticate')
@@ -780,7 +793,8 @@ class imageManager:
             _content = json.loads(_file.read())
             #appLogger.debug('Config Content: %s', _content)
 
-        appLogger.debug('Container ENV: %s', _content['config']['Env'])
+        appLogger.debug('Config _content: %s', _content)
+        appLogger.debug('Container ENV: %s', _content['config'].get('Env', 'NOT_DEFINED'))
 
         return _content
 
@@ -902,7 +916,15 @@ class imageManager:
                         try:
                             _tfile.extract(_entry, path=installPath, filter='fully_trusted')
                         except TypeError:
-                            _tfile.extract(_entry, path=installPath)
+                            try:
+                                _tfile.extract(_entry, path=installPath)
+                            except PermissionError:
+                                appLogger.debug('Permission Error on extracting file: %s',
+                                                _entry.name)
+                                continue
+                        except PermissionError:
+                            appLogger.debug('Permission Error on extracting file: %s', _entry.name)
+                            continue
 
                         # Handle permissions again after extraction
                         if not (_entry.issym() or _entry.islnk()):
@@ -1120,6 +1142,9 @@ class sessionManager:
         '''
         Remove a file from the sandbox
         '''
+        if not os.path.exists(path):
+            #appLogger.debug('Path does not exist: %s', path)
+            return
 
         removeCMD = f'rm -rf {path}'
         appLogger.debug('nsenter --preserve-credentials --user --mount --pid -t %s %s',
@@ -1138,7 +1163,7 @@ class sessionManager:
         del removeProc
 
         if removeRC != 0:
-            appLogger.error('Failed to Remove Path: %s', path)
+            appLogger.debug('Failed to Remove Path: %s', path)
             raise IOError('Failed to Remove Path')
 
     def createSandboxPath(self, path : str, overridePID : int=-1) -> None:
@@ -1378,31 +1403,32 @@ class sessionManager:
             else:
                 commandPath = os.path.join(self.sandboxPath, 'bin/bash')
             if os.path.exists(commandPath):
-                command = 'env -i /bin/bash -l -c "true; env -i /bin/bash'
-                command += ' --rcfile /etc/profile -l; exit $?"'
+                command = 'env -i /bin/bash -l -i -c "true; env /bin/bash '
+                command += ' --rcfile /etc/profile -l ; exit $?"'
             else:
                 command = 'env -i /bin/sh'
         else:
             if not self.compatV1:
                 commandPath = os.path.join(self.sandboxPath, 'bin/bash')
                 if os.path.exists(commandPath):
-                    command = f'env -i /bin/bash --rcfile /etc/profile -l -c "true; {command}" '
+                    command = f'env -i /bin/bash --rcfile /etc/profile -l -i -c "true; {command}" '
                 else:
                     pass
             else:
-                command = f'env -i /bin/bash --rcfile /etc/profile -l -c \'true; {command}\''
+                command = f'env -i /bin/bash --rcfile /etc/profile -l -i -c \'true; {command}\''
         #command = '/bin/bash -l'
 
         if not self.compatV1:
             # Continue as Normal and use good hosts unshare
             if asRoot:
-                chrootCMD = f'/bin/bash -c \'mount -t tmpfs tmpfs {self.getSandboxPath()}/run; '
-                chrootCMD = chrootCMD + 'unshare -priUmf --mount --mount-proc -R '
-                chrootCMD = chrootCMD + f'{self.getSandboxPath()} --propagation=unchanged '
-                chrootCMD = chrootCMD + f'{command};\' exit $?'
+                chrootCMD  = '/bin/bash --rcfile /etc/profile -l -c '
+                chrootCMD += f'\'mount -t tmpfs tmpfs {self.getSandboxPath()}/run; '
+                chrootCMD += 'unshare -priUmf --mount --mount-proc -R '
+                chrootCMD += f'{self.getSandboxPath()} --propagation=unchanged '
+                chrootCMD += f'{command};\' exit $?'
             else:
-                chrootCMD = f'unshare -piUmf --mount --mount-proc -R {self.getSandboxPath()} '
-                chrootCMD = chrootCMD + f'--propagation=unchanged {command}'
+                chrootCMD  = f'unshare -piUmf --mount --mount-proc -R {self.getSandboxPath()} '
+                chrootCMD += f'--propagation=unchanged {command}'
         else:
             # Use the older compatibility mode for the sandbox,
             # use chroot and drop the '-R' unshare arg...
@@ -1421,7 +1447,7 @@ class sessionManager:
                 appLogger.warning('if dropping into a \'non-root\' sandbox.')
                 appLogger.warning('Running as "root" in sandbox')
 
-            chrootCMD = ' /bin/bash -c '
+            chrootCMD = ' /bin/bash --rcfile /etc/profile -l -c '
             chrootCMD +='"export PATH=/bin:/sbin:/usr/sbin:/usr/bin:/usr/local/bin:/usr/local/sbin;'
             chrootCMD += '/bin/mount -t tmpfs tmpfs /run;'
             chrootCMD += f'/bin/mount -t proc proc /proc; sleep 1; chroot {self.getSandboxPath()} '
@@ -1760,9 +1786,9 @@ class sandboxFixes:
         Fix the permissions of a given path
         '''
 
-        stampFile = os.path.join(self.sandboxInstance.getSandboxPath(), '.appBox')
-        if os.path.exists(stampFile):
-            return
+        #stampFile = os.path.join(self.sandboxInstance.getSandboxPath(), '.appBox')
+        #if os.path.exists(stampFile):
+        #    return
 
         if self.sandboxInstance.rootfs:
             return
@@ -1787,7 +1813,7 @@ class sandboxFixes:
         # well...
         # yeah...
         basePathList = ['/afs', '/dev', '/etc', '/cvmfs', '/scratch', '/Data', '/localdisk',
-                          '/sys', '/tmp', '/home', '/proc', f'/tmp/{getUN()}', '/mnt']
+                          '/sys', '/tmp', '/home', '/proc', '/mnt']
 
         if self.addNVidia:
             basePathList.append('/usr/lib/wsl')
@@ -1832,8 +1858,12 @@ class sandboxFixes:
                         os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_path)))
 
         for _path in absPaths:
-            if not os.path.exists(_path):
+            try:
+                if os.path.exists(_path) or os.path.islink(_path):
+                    self.sandboxInstance.removeFromSandBox(_path)
                 self.sandboxInstance.createSandboxEmptyFile(_path)
+            except IOError as err:
+                appLogger.debug('Error making stub: %s', err)
 
     def getAnonUIDGID(self) -> tuple:
         '''
@@ -1857,11 +1887,16 @@ class sandboxFixes:
             self._fixGroup(tmpGroupFile)
         finally:
             os.unlink(tmpGroupFile)
-        tmpShadowFile = os.path.join(self.tmpPath, f'gshadow_{str(uuid.uuid4())[:8]}')
         try:
+            tmpShadowFile = os.path.join(self.tmpPath, f'gshadow_{str(uuid.uuid4())[:8]}')
             self._fixGShadow(tmpShadowFile)
+        except IOError as err:
+            appLogger.debug('Error: %s', err)
         finally:
-            os.unlink(tmpShadowFile)
+            try:
+                os.unlink(tmpShadowFile)
+            except FileNotFoundError as err:
+                appLogger.debug('Error: %s', err)
 
     def _fixPasswd(self, tmpPasswdFile : str) -> None:
         '''
@@ -1937,6 +1972,9 @@ class sandboxFixes:
         '''
         This fixes the gshadow config, mainly for debian systems
         '''
+        if not os.path.exists(os.path.join(
+                self.sandboxInstance.getSandboxPath(), './etc/gshadow')):
+            return
         self.sandboxInstance.copyFileToHost('/etc/gshadow', tmpShadowFile)
         with open(tmpShadowFile, 'r', encoding='utf-8') as _file:
             _content = _file.read()
@@ -2023,22 +2061,34 @@ class sandboxFixes:
             Build the env vars which we want to expose users to
             '''
 
-            _home = getHome()
-            envs  = 'export PATH="${PATH}:/"\n'
+            envs  = 'export PATH="${PATH}:/sbin:/usr/sbin"\n'
             envs += 'export DEBIAN_FRONTEND="noninteractive"\n'
-            envs += 'export TERM=xterm-256color\n'
+            host_lang = os.environ.get('LANG', 'en_GB.UTF-8')
+            envs += f'export LANG="{host_lang}"\n'
+            host_lang2 = os.environ.get('LANGUAGE', 'en_GB:en')
+            envs += f'export LANGUAGE="{host_lang2}"\n'
+            host_term = os.environ.get('TERM', 'xterm-256color')
+            envs += f'export TERM="{host_term}"\n'
+            host_home = getHome()
             envs += 'export HOME=$( [ $(id -u) -eq 0 ] && echo "/root" ||'
-            envs += f'echo "{_home}" )\n'
+            envs += f'echo "{host_home}" )\n'
             envs += f'export HOSTNAME={socket.gethostname()}\n'
-            envs += 'export DISPLAY=:0\n'
-            envs += 'export WAYLAND_DISPLAY=wayland-0\n'
+            host_display = os.environ.get('DISPLAY', ':0')
+            envs += f'export DISPLAY="{host_display}"\n'
+            host_wayland = os.environ.get('WAYLAND_DISPLAY', 'wayland-0')
+            envs += f'export WAYLAND_DISPLAY="{host_wayland}"\n'
+            host_user = os.environ.get('USER', getUN())
+            envs += f'export USER="{host_user}"\n'
             envs += 'if [ $(id -u) -eq 0 ]; then USR_MSG="\033[1;31mAS ROOT\033[0m";'
             envs += 'else USR_MSG="\033[32mas $(whoami)\033[0m"; fi\n'
-            envs += 'echo " Now Running \033[31m[\033[33ma\033[32mp'
+            envs += 'alias nvidia-smi="ldconfig; nvidia-smi"\n'
+            envs += 'alias nvidia-modprobe="ldconfig; nvidia-modprobe"\n'
+            envs += 'if [ "${APPBOX}" == "1" ]; then return; fi\n'
+            envs += 'echo "\n Now Running \033[31m[\033[33ma\033[32mp'
             envs += '\033[36mp\033[32mB\033[36mo\033[34mx\033[m\033[35m]\033[0m ! '
             envs += f'(sandbox based on image: \033[1;31m{self.iManager.userPath}\033[0m) '
             envs += ' ${USR_MSG}\n"\n'
-            envs += '/usr/sbin/ldconfig\n'
+            envs += 'export APPBOX=1\n'
             with open(tmpENVFile, 'w+', encoding='utf-8') as _file:
                 _file.write(envs)
             self.sandboxInstance.copyFileFromHost(tmpENVFile,
@@ -2149,7 +2199,7 @@ class sandboxFixes:
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 
 if [ "$#" -eq 0 ]; then
-  cmd="env -i /bin/bash "
+  cmd="env /bin/bash --rcfile /etc/profile -l"
 else
   cmd="$*"
 fi
@@ -2183,12 +2233,16 @@ fi
 
         for _file in ['/usr/bin/chown', '/bin/chown',
                       '/usr/bin/su', '/bin/su', '/usr/bin/sudo', '/bin/sudo']:
-            self.sandboxInstance.copyFileFromHost(
+            try:
+                if os.path.islink(os.path.join(
+                                self.sandboxInstance.getSandboxPath(), '.'+_file)):
+                    self.sandboxInstance.removeFromSandBox(os.path.join(
+                                self.sandboxInstance.getSandboxPath(), '.'+_file))
+                self.sandboxInstance.copyFileFromHost(
                             os.path.join(self.sandboxInstance.getSandboxPath(), 'bin/true'),
                             os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_file))
-            self.sandboxInstance.copyFileFromHost(
-                            os.path.join(self.sandboxInstance.getSandboxPath(), 'bin/true'),
-                            os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_file))
+            except IOError as err:
+                appLogger.debug('Error: %s', err)
 
     def applyImageEnv(self) -> None:
         '''
@@ -2231,6 +2285,10 @@ fi
         '''
 
         thisConfig = self.iManager.getConfig()
+
+        thisEnv = thisConfig['config'].get('Env', 'NOT_DEFINED')
+        if thisEnv == 'NOT_DEFINED':
+            return
 
         all_envs = ""
         for _env in thisConfig['config']['Env']:
@@ -2645,12 +2703,11 @@ def main() -> None:
                             addNV, lowerLayer, runCMD)
             if rc != 0:
                 appLogger.debug('Command failed with RC: %s', rc)
-                return rc
             if not commandToRun and not shouldRun:
                 msg  = f'Image: \033[1;33m"{wantedImage}"{bgColour}'
                 msg += f' installed at: \033[1;34m"{wantedDest}"{bgColour}\n\n'
                 msg += 'To launch this sandbox, use:\n'
-                msg += f'\t\t\t\t\033[1;31m"source {wantedDest}/bin/activate"{bgColour}'
+                msg += f'\t\t\t\t\033[1;31msource {wantedDest}/bin/activate{bgColour}'
                 appLogger.info(msg)
 
         except PermissionError as permissionErr:
@@ -2682,11 +2739,11 @@ def main() -> None:
         # We now plan to run a command or launch a shell
         rc = runCommand(iManager, wantedDest, commandToRun, asRoot, compatV1,
                         addNV, lowerLayer)
-        if parsedArgs.tmp:
-            shutil.rmtree(wantedDest)
-        return rc
 
-    return 0
+    if parsedArgs.tmp:
+        shutil.rmtree(wantedDest)
+
+    return rc
 
 
 if __name__ == '__main__':
