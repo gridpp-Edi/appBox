@@ -20,7 +20,17 @@
 # Appbox: Run Anything, Anywhere - Empowering Users!
 
 <pre>./appBox -ii almalinux:9 -ip ./AlmaLinux9
+
 source ./AlmaLinux9/bin/activate
+> cat /etc/os-release
+NAME="AlmaLinux"
+...
+> deactivate
+
+source ./AlmaLinux9/bin/activate-asroot
+# whoami
+root
+# deactivate
 </pre>
 
 # About
