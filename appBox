@@ -197,6 +197,7 @@ class downloadTokenAuthenticator:
                 appLogger.error('Failed to connect to: %s', remoteHost)
                 appLogger.error('Error: %s', err)
                 if i == 2:
+                    #pylint: disable=W0707
                     raise ConnectionError(f'Failed to connect to: "{remoteHost}"')
                 #raise ConnectionError(f'Failed to connect to: "{remoteHost}"')
 
