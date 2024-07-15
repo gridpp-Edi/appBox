@@ -3,7 +3,7 @@
 <img src="https://raw.githubusercontent.com/gridpp-Edi/appBox/master/logo.png?raw=true" width=512 align="center"> 
 </p>
 
-# AppBox; It installs a docker container like a Python virtualenv.
+# AppBox; Installing a container as a virtualenv.
 <br>
 
 <pre>
