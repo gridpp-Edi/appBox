@@ -54,6 +54,9 @@ This tool does not require additional packages to be installed on most modern Li
 | Can it support GPUs? | ✅ | ✅ | ✅ | ✅ |
 | Can it support launching a service that listens on a port? | ✅ | ✅ | ✅ | ✅ |
 | Does it support caching Image layers? | ✅ | ✅ | ✅ | ✅ |
+| Supports all common image formats? | ✅* | ✅ | ✅ | ✅ |
+
+*I try to, this is a ground-up implementation of the dockerhub repoAPI in pure Python so there are odd containers/corner-cases which still catch this-out...
 
 # Usage:
 
