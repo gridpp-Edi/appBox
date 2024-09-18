@@ -662,6 +662,7 @@ class imageManager:
                              suffix = 'Complete', length = 50)
         else:
             appLogger.debug("Failed to download layer: %s", response.read())
+            appLogger.debug("%s", response)
             raise ConnectionError(f'Failed to download layer: "{response.status}"')
 
         if not imageManager.checkDownloadIntegrity(outputFile, digestSha):
@@ -704,6 +705,7 @@ class imageManager:
                                    parsedURL.path, parsedURL.query, outputFile, digestSha)
 
         else:
+            appLogger.debug(response.headers)
             raise ConnectionError(f'Failed to download layer: "{response.status}"')
 
         return True
@@ -1770,7 +1772,7 @@ class sandboxFixes:
         Copy certain configs from the host to the sandbox so things work
         '''
 
-        fileList = ['/etc/resolv.conf', '/etc/hostname',
+        fileList = ['/etc/resolv.conf', '/etc/hostname', '/etc/hosts',
                     '/etc/localtime', '/etc/timezone', '/etc/vimrc']
 
         for _file in fileList:
