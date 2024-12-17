@@ -2064,7 +2064,7 @@ class sandboxFixes:
             Build the env vars which we want to expose users to
             '''
 
-            envs  = 'export PATH="${PATH}:/sbin:/usr/sbin"\n'
+            envs  = 'export PATH="${PATH}:/sbin:/usr/sbin:/usr/games"\n'
             envs += 'export DEBIAN_FRONTEND="noninteractive"\n'
             host_lang = os.environ.get('LANG', 'en_GB.UTF-8')
             envs += f'export LANG="{host_lang}"\n'
