@@ -1424,7 +1424,7 @@ class sessionManager:
         if not self.compatV1:
             # Continue as Normal and use good hosts unshare
             if asRoot:
-                chrootCMD  = '/bin/bash --rcfile /etc/profile -l -c '
+                chrootCMD  = '/bin/bash --rcfile /etc/profile -c '
                 chrootCMD += f'\'mount -t tmpfs tmpfs {self.getSandboxPath()}/run; '
                 chrootCMD += 'unshare -priUmf --mount --mount-proc -R '
                 chrootCMD += f'{self.getSandboxPath()} --propagation=unchanged '
@@ -1450,7 +1450,7 @@ class sessionManager:
                 appLogger.warning('if dropping into a \'non-root\' sandbox.')
                 appLogger.warning('Running as "root" in sandbox')
 
-            chrootCMD = ' /bin/bash --rcfile /etc/profile -l -c '
+            chrootCMD = ' /bin/bash --rcfile /etc/profile -c '
             chrootCMD +='"export PATH=/bin:/sbin:/usr/sbin:/usr/bin:/usr/local/bin:/usr/local/sbin;'
             chrootCMD += '/bin/mount -t tmpfs tmpfs /run;'
             chrootCMD += f'/bin/mount -t proc proc /proc; sleep 1; chroot {self.getSandboxPath()} '
@@ -2071,6 +2071,7 @@ class sandboxFixes:
             host_lang2 = os.environ.get('LANGUAGE', 'en_GB:en')
             envs += f'export LANGUAGE="{host_lang2}"\n'
             host_term = os.environ.get('TERM', 'xterm-256color')
+            envs += 'export LC_ALL="C"\n'
             envs += f'export TERM="{host_term}"\n'
             host_home = getHome()
             envs += 'export HOME=$( [ $(id -u) -eq 0 ] && echo "/root" ||'
@@ -2186,13 +2187,16 @@ class sandboxFixes:
         if self.sandboxInstance.rootfs:
             cvmfsArgs = f'-cvmfs {os.path.abspath(self.sandboxInstance.rootfs)}'
 
-        for _ in ['user', 'root', 'debug']:
+        for _ in ['user', 'root', 'debug', 'rdebug']:
             if _ == 'root':
                 asString = '-rcr "${cmd}"'
                 scriptName = 'bin/activate-asroot'
             elif _ == 'user':
                 asString = '-rc "${cmd}"'
                 scriptName = 'bin/activate'
+            elif _ == 'rdebug':
+                asString = '-rcr "${cmd}"'
+                scriptName = 'bin/activate-asroot-debug'
             else:
                 asString = '-d -rc "${cmd}"'
                 scriptName = 'bin/activate-debug'
@@ -2266,7 +2270,7 @@ fi
         implicit_env = ""
 
         for _step in thisConfig['history']:
-            if _step['created_by']:
+            if _step.get('created_by',False):
                 if _step['created_by'].startswith('ARG'):
                     _env = _step['created_by'][4:]
                     appLogger.debug('Setting Environment %s', _env)
