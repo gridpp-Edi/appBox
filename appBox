@@ -1261,9 +1261,12 @@ class sessionManager:
         '''
         hostMounts = self.getSharePaths()
 
-        for hostPath in hostMounts:
+        hostMounts = list(zip(hostMounts,hostMounts))
+        hostMounts.append(('/', '/hostfs'))
 
-            sandboxPath = os.path.abspath(os.path.join(self.getSandboxPath(), '.' + hostPath))
+        for hostPath, guestPath in hostMounts:
+
+            sandboxPath = os.path.abspath(os.path.join(self.getSandboxPath(), '.' + guestPath))
 
             if not os.path.exists(hostPath):
                 appLogger.debug('Skipping path %s, as it doesn\'t exist on the host', hostPath)
@@ -2350,7 +2353,7 @@ class appBoxManager:
         console_handler.setLevel(level)
         if level == logging.DEBUG:
             console_formatter = logging.Formatter(
-            "\033[1;32m%(asctime)s.%(msecs)03d';%(levelname)s: %(message)s", "%Y-%m-%d %H:%M:%S")
+            "\033[1;32m%(asctime)s.%(msecs)03d';%(levelname)s: %(message)s\033[0m", "%Y-%m-%d %H:%M:%S")
         else:
             console_formatter = logging.Formatter('%(message)s')
         console_handler.setFormatter(console_formatter)
@@ -2401,7 +2404,7 @@ Example Usage for this might be:
 # Usage 1 (Download, extract, setup then manuall source) #
 ##########################################################
 
-RH> ./appBox -ii Ubuntu20 -ip /scratch/appBox_{un}/Ubuntu20
+RH> ./appBox -ii ubuntu:20.04 -ip /scratch/appBox_{un}/Ubuntu20
 RH> source /scratch/appBox_{un}/Ubuntu20/bin/activate
 ...
 Ubuntu>
@@ -2417,7 +2420,7 @@ RH9# dnf update -y
 # Usage 3 (Download, ..., then run a command and exit) #
 ########################################################
 
-RH7> ./appBox -ii Ubuntu22 -ip /scratch/appBox_{un}/Ubuntu22 -q -rcr 'echo /etc/os-release'
+RH7> ./appBox -ii ubuntu:22.04 -ip /scratch/appBox_{un}/Ubuntu22 -q -rcr 'echo /etc/os-release'
 PRETTY_NAME="Ubuntu 22.04.4 LTS"
 NAME="Ubuntu"
 VERSION_ID="22.04"
