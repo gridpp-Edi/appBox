@@ -65,7 +65,7 @@ from urllib.parse import urlparse
 import uuid
 
 
-__version__ = '3.0.1'
+__version__ = '3.1.0'
 appBoxVersion = __version__
 
 
