@@ -30,10 +30,12 @@
 #
 
 import argparse
+import base64
 import datetime
 import fcntl
 from functools import wraps
 import http.client
+import getpass
 import json
 import hashlib
 import logging
@@ -170,8 +172,33 @@ class downloadTokenAuthenticator:
         self.manifestPath = f"/v2/{self.imagePath}/manifests/latest"
         self.tokenExpiry = time.time() - 300  # Assume token is valid for 5min
         #self.getNewToken()
+        self._credentials = {}
 
-    def _getAuthnService(self) -> None:
+    @staticmethod
+    def make_https_request(host : str, method : str, path : str, headers : dict=None) -> tuple:
+        '''
+        Make an HTTPS request to the given host
+        '''
+        if host.startswith("https://"):
+            host = host[8:]
+        elif host.startswith("http://"):
+            host = host[7:]
+        conn = http.client.HTTPSConnection(host)
+        conn.request(method, path, headers=headers or {})
+        response = conn.getresponse()
+        body = response.read().decode("utf-8")
+        return response.status, dict(response.getheaders()), body
+
+    def _prompt_for_credentials(self, registry : str) -> tuple:
+        """Prompt user for credentials if not already stored"""
+        if registry not in self._credentials:
+            print(f"Authentication required for {registry}")
+            username = input("Username: ")
+            password = getpass.getpass("Password: ")
+            self._credentials[registry] = (username, password)
+        return self._credentials[registry]
+
+    def _getAuthnServiceDocker(self) -> None:
         '''
         This method gets the authentication service for the registry
         '''
@@ -229,9 +256,54 @@ class downloadTokenAuthenticator:
             raise ConnectionError(f'Redirected to: "{response.getheader("Location")}"')
 
     def _getDownloadToken(self) -> None:
+
+        appLogger.debug("Getting Download Token: %s", self.repoURL)
+
+        if "quay.io" in self.repoURL:
+            self._getDownloadTokenQuay()
+        elif "git" in self.repoURL:
+            self._getDownloadTokenGitLab()
+        else:
+            self._getAuthnServiceDocker()
+            self._getDownloadTokenDocker()
+
+    def _getDownloadTokenGitLab(self) -> None:
+
+        raise NotImplementedError("GitLab Authentication is not yet implemented")
+
+    def _getDownloadTokenQuay(self) -> None:
+
+        appLogger.debug("Getting Quay Download Token")
+        reqPath = f"/v2/auth?service=quay.io&scope=repository:{self.imagePath}:pull"
+        try:
+            status, _, body = downloadTokenAuthenticator.make_https_request(
+                                                    self.repoURL, "GET", reqPath)
+            if status == 200:
+                self.token = json.loads(body).get("token")
+                appLogger.debug("Quay Token: %s", self.token)
+                return
+            else:
+                raise ConnectionError(f"Failed to get Quay.io token: {body}")
+        except ConnectionError as e:
+            appLogger.warning("Failed to get Quay.io token: %s", e)
+
+        appLogger.info("Attempting to use user-credentials.")
+
+        username, password = self._prompt_for_credentials(self.repoURL)
+        basic = base64.b64encode(f"{username}:{password}".encode()).decode()
+        headers = {"Authorization": f"Basic {basic}"}
+        status, _, body = downloadTokenAuthenticator.make_https_request(
+                                            self.repoURL, "GET", reqPath, headers)
+        if status == 200:
+            return json.loads(body).get("token")
+        else:
+            raise ConnectionError("Failed to get Quay.io token: %s", str(body))
+
+    def _getDownloadTokenDocker(self) -> None:
         '''
         This method gets the download token for the registry
         '''
+        appLogger.debug("Getting Docker Download Token")
 
         fullTokenURL = f'{self.authRealm}?service={self.authService}&scope={self.authScope}'
         parsedURL = urllib.parse.urlsplit(fullTokenURL)
@@ -265,7 +337,6 @@ class downloadTokenAuthenticator:
         '''
 
         if self.tokenRequired:
-            self._getAuthnService()
             self._getDownloadToken()
         else:
             return
@@ -693,7 +764,7 @@ class imageManager:
         if response.status == 200:
             self._downloadLocation(parsedURL.hostname, parsedURL.port,
                                    imagePath, '', outputFile, digestSha)
-        elif response.status == 307:
+        elif response.status in [301, 302, 307]:
 
             appLogger.debug("Redirected to: %s", response.getheader("Location"))
             relocated = response.getheader("Location")
@@ -2353,7 +2424,7 @@ class appBoxManager:
         console_handler.setLevel(level)
         if level == logging.DEBUG:
             console_formatter = logging.Formatter(
-            "\033[1;32m%(asctime)s.%(msecs)03d';%(levelname)s: %(message)s\033[0m", "%Y-%m-%d %H:%M:%S")
+        "\033[1;32m%(asctime)s.%(msecs)03d';%(levelname)s: %(message)s\033[0m", "%Y-%m-%d %H:%M:%S")
         else:
             console_formatter = logging.Formatter('%(message)s')
         console_handler.setFormatter(console_formatter)
