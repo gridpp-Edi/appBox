@@ -113,30 +113,39 @@ def findMountPath(path) -> str:
     return path
 
 
-def printBar(iteration : int, total : int, prefix : str='',
-             suffix : str='', length : int=50, fill : str='█') -> None:
+class ProgressBar:
     '''
-    Call in a loop to create terminal progress bar
-    @params:
-        iteration   - Required  : current iteration (Int)
-        total       - Required  : total iterations (Int)
-        prefix      - Optional  : prefix string (Str)
-        suffix      - Optional  : suffix string (Str)
-        length      - Optional  : character length of bar (Int)
-        fill        - Optional  : bar fill character (Str)
+    Class to manage the state of the progress bar
     '''
-    if total<=0:
-        total = 1
-    percent = 100 * (iteration / float(total))
-    percent = f"{round(percent, 2)}"
-    filled_length = int(length * iteration // total)
-    barStr = fill * filled_length + '-' * (length - filled_length)
-    #if appLogger.level <= logging.INFO:
-    #barLogger.info(f'{prefix} |{bar}| {percent}% {suffix}')
-    barLogger.info('%s |%s| %s%% %s', prefix, barStr, percent, suffix)
-    # Print New Line on Complete
-    if iteration == total:
-        barLogger.info('\n')
+    _last_iteration = -1
+
+    @staticmethod
+    def printBar(iteration: int, total: int, prefix: str = '',
+                 suffix: str = '', length: int = 50, fill: str = '█') -> None:
+        '''
+        Call in a loop to create terminal progress bar
+        @params:
+            iteration   - Required  : current iteration (Int)
+            total       - Required  : total iterations (Int)
+            prefix      - Optional  : prefix string (Str)
+            suffix      - Optional  : suffix string (Str)
+            length      - Optional  : character length of bar (Int)
+            fill        - Optional  : bar fill character (Str)
+        '''
+        if iteration == ProgressBar._last_iteration:
+            return
+
+        ProgressBar._last_iteration = iteration
+
+        if total <= 0:
+            total = 1
+        percent = 100 * (iteration / float(total))
+        percent = f"{round(percent, 2)}"
+        filled_length = int(length * iteration // total)
+        barStr = fill * filled_length + '-' * (length - filled_length)
+        barLogger.info('%s |%s| %s%% %s', prefix, barStr, percent, suffix)
+        if iteration == total:
+            barLogger.info('\n')
 
 
 def bytesToHuman(num_bytes : int) -> str:
@@ -728,7 +737,8 @@ class imageManager:
         if response.status == 200:
             total=math.ceil(contentLength/4096)
             # Initial call to print 0% progress
-            printBar(0, total, prefix = 'Downloading:', suffix = 'Complete', length = 50)
+            ProgressBar.printBar(0, total, prefix = 'Downloading:', suffix = 'Complete',
+                                 length = 50)
             # Open the output file for writing
             with open(outputFile, 'wb') as file:
                 # Read the response in blocks and write to the file
@@ -739,7 +749,7 @@ class imageManager:
                         break
                     file.write(block)
                     i+=1
-                    printBar(i, total, prefix = 'Downloading:',
+                    ProgressBar.printBar(i, total, prefix = 'Downloading:',
                              suffix = 'Complete', length = 50)
         else:
             appLogger.debug("Failed to download layer: %s", response.read())
@@ -970,11 +980,13 @@ class imageManager:
                     continue
                 #total = layerSize
 
-                printBar(0, total, prefix = 'Extracting:', suffix = 'Complete', length = 50)
+                ProgressBar.printBar(0, total, prefix = 'Extracting:', suffix = 'Complete',
+                                     length = 50)
                 i=0
                 for _entry in _tfile:
                     i+=1
-                    printBar(i, total, prefix = 'Extracting:', suffix = 'Complete', length = 50)
+                    ProgressBar.printBar(i, total, prefix = 'Extracting:', suffix = 'Complete',
+                                         length = 50)
                     #total=len(_tfile.getmembers())
                     #if i%100 == 0:
                     #    appLogger.debug('Extracting: %s/%s', i, total)
@@ -1141,9 +1153,12 @@ class sessionManager:
         self.pidParent=self.proc.pid
         time.sleep(0.05)
 
+        timeout = 10
+
         parentID = self.pidParent
         childID = parentID
-        while True:
+        start_time = time.time()
+        while time.time() - start_time < timeout:
 
             appLogger.debug('Parent PID: %s', parentID)
             appLogger.debug('Child PID: %s', childID)
@@ -1156,6 +1171,8 @@ class sessionManager:
             time.sleep(0.05)
 
             appLogger.debug('---')
+        if (time.time()-start_time) >= timeout:
+            raise TimeoutError('Timeout waiting for child PID from Host')
 
         if not self.pidChild:
             raise SystemError('Cannot Fork Child Process. Are you trying to run inside appBox?')
@@ -1450,6 +1467,11 @@ class sessionManager:
                 os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
             sys.stdin.flush()
             sys.stdout.flush()
+
+            for handler in (self.ptyMfd, self.ptySfd):
+                if handler:
+                    os.close(handler)
+
         except (IOError, OSError) as delErr:
             appLogger.debug('Deletion Error: %s', delErr)
 
@@ -1588,7 +1610,11 @@ class sessionManager:
                     user_input = os.read(sys.stdin.fileno(), 1024)
                     if not user_input:
                         break
-                    os.write(self.ptyMfd, user_input)
+                    try:
+                        os.write(self.ptyMfd, user_input)
+                    except BrokenPipeError:
+                        appLogger.debug('Broken pipe while writing to PTY.')
+                        self.terminate_event.set()
                 if process.poll() is not None:
                     break
         except OSError:
@@ -1645,7 +1671,9 @@ class sessionManager:
         # Someone is patching code somewhere OOB and it makes me unhappy :(
         procCMD = ['/bin/bash', '-c', procCMD]
 
-        appLogger.debug('Running: %s', procCMD)
+        appLogger.debug('Opening PTY: master_fd=%s, slave_fd=%s', self.ptyMfd, self.ptySfd)
+        appLogger.debug('Subprocess command: %s', procCMD)
+        appLogger.debug('Starting read and write threads for PTY interaction.')
         # Start the subprocess with the slave side of the PTY as its stdin, stdout, and stderr
         # pylint: disable=locally-disabled, subprocess-popen-preexec-fn
         interactiveProc = subprocess.Popen(
@@ -1846,8 +1874,6 @@ class sandboxFixes:
             initialFixesApplied = False
 
         if not initialFixesApplied:
-            appLogger.debug('Applying Permission Fixes')
-            self.fixFilePermissions()
             appLogger.debug('Applying Apt Fixes')
             self.fixAptSandboxing()
             appLogger.debug('Applying DNF Fixes')
@@ -1859,6 +1885,8 @@ class sandboxFixes:
             appLogger.debug('Installing sandbox data')
             self.stampSandbox()
 
+        appLogger.debug('Applying Permission Fixes')
+        self.fixFilePermissions()
         appLogger.debug('Fixing Missing Paths')
         self.fixMissingPaths()
         appLogger.debug('Fixing Missing Stubs')
@@ -1910,12 +1938,18 @@ class sandboxFixes:
                 thisPath = os.path.join(root,_dir)
                 if not os.path.islink(thisPath):
                     current = stat.S_IMODE(os.lstat(thisPath).st_mode)
-                    os.chmod(thisPath, current | stat.S_IWUSR | stat.S_IRUSR | stat.S_ISGID)
+                    desired = current | stat.S_IWUSR | stat.S_IRUSR | stat.S_ISGID
+                    if current != desired:
+                        os.chmod(thisPath, desired)
+                    #os.chmod(thisPath, current | stat.S_IWUSR | stat.S_IRUSR | stat.S_ISGID)
             for _file in files:
                 thisPath = os.path.join(root,_file)
                 if not os.path.islink(thisPath):
                     current = stat.S_IMODE(os.lstat(thisPath).st_mode)
-                    os.chmod(os.path.join(root,_file), current | stat.S_IWUSR | stat.S_IRUSR)
+                    desired = current | stat.S_IWUSR | stat.S_IRUSR
+                    if current != desired:
+                        os.chmod(thisPath, desired)
+                    #os.chmod(os.path.join(root,_file), current | stat.S_IWUSR | stat.S_IRUSR)
 
     def _getPathList(self) -> list:
         '''
