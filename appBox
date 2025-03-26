@@ -1047,6 +1047,9 @@ class sessionManager:
 
         self.ptyMfd, self.ptySfd = None, None
 
+        # Use threading.Event to signal termination
+        self.terminate_event = threading.Event()
+
         atexit.register(self.cleanupSpaces)
 
     def getSandboxPath(self) -> str:
@@ -1549,7 +1552,7 @@ class sessionManager:
         Read from the master PTY file descriptor and print to stdout.
         '''
         try:
-            while True:
+            while not self.terminate_event.is_set():
                 rlist, _, _ = select.select([self.ptyMfd], [], [], 0.1)
                 if self.ptyMfd in rlist:
                     data = os.read(self.ptyMfd, 1024)
@@ -1563,6 +1566,7 @@ class sessionManager:
         except OSError:
             pass
         finally:
+            self.terminate_event.set()
             if process.poll() is None:
                 process.terminate()
             try:
@@ -1578,7 +1582,7 @@ class sessionManager:
         old_settings = termios.tcgetattr(sys.stdin)
         try:
             tty.setraw(sys.stdin)
-            while True:
+            while not self.terminate_event.is_set():
                 rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
                 if sys.stdin in rlist:
                     user_input = os.read(sys.stdin.fileno(), 1024)
@@ -1590,6 +1594,7 @@ class sessionManager:
         except OSError:
             pass
         finally:
+            self.terminate_event.set()
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
             try:
                 if self.ptyMfd:
@@ -1601,11 +1606,14 @@ class sessionManager:
         '''
         Handle window resize signal and adjust the PTY window size.
         '''
-        s = struct.pack('HHHH', 0, 0, 0, 0)
-        rows, cols, xpixels, ypixels = struct.unpack('HHHH',
-                                                fcntl.ioctl(sys.stdout, termios.TIOCGWINSZ, s))
-        fcntl.ioctl(self.ptyMfd, termios.TIOCSWINSZ,
-                    struct.pack('HHHH', rows, cols, xpixels, ypixels))
+        try:
+            s = struct.pack('HHHH', 0, 0, 0, 0)
+            rows, cols, xpixels, ypixels = struct.unpack('HHHH',
+                                                    fcntl.ioctl(sys.stdout, termios.TIOCGWINSZ, s))
+            fcntl.ioctl(self.ptyMfd, termios.TIOCSWINSZ,
+                        struct.pack('HHHH', rows, cols, xpixels, ypixels))
+        except OSError as err:
+            appLogger.debug('Error resizing PTY: %s', err)
 
     def spawn_bash_terminal(self, command : str, asRoot : bool=False) -> int:
         '''
@@ -1829,12 +1837,28 @@ class sandboxFixes:
         '''
         Apply all of the fixes to this sandbox
         '''
-        appLogger.debug('Applying Permission Fixes')
-        self.fixFilePermissions()
-        appLogger.debug('Applying Apt Fixes')
-        self.fixAptSandboxing()
-        appLogger.debug('Applying DNF Fixes')
-        self.fixDnfSandboxing()
+
+        appLogger.debug('Examining Sandbox')
+        try:
+            _ = self.readStampSandbox()
+            initialFixesApplied = True
+        except FileNotFoundError:
+            initialFixesApplied = False
+
+        if not initialFixesApplied:
+            appLogger.debug('Applying Permission Fixes')
+            self.fixFilePermissions()
+            appLogger.debug('Applying Apt Fixes')
+            self.fixAptSandboxing()
+            appLogger.debug('Applying DNF Fixes')
+            self.fixDnfSandboxing()
+            appLogger.debug('Fixing missing Env')
+            self.applyImageEnv()
+            appLogger.debug('Cache Manifest within sandbox')
+            self.cacheManifest()
+            appLogger.debug('Installing sandbox data')
+            self.stampSandbox()
+
         appLogger.debug('Fixing Missing Paths')
         self.fixMissingPaths()
         appLogger.debug('Fixing Missing Stubs')
@@ -1851,12 +1875,6 @@ class sandboxFixes:
         self.copyFromHost()
         appLogger.debug('Fixing bad tools')
         self.fixForLies()
-        appLogger.debug('Fixing missing Env')
-        self.applyImageEnv()
-        appLogger.debug('Cache Manifest within sandbox')
-        self.cacheManifest()
-        appLogger.debug('Installing sandbox data')
-        self.stampSandbox()
 
     def copyFromHost(self) -> None:
         '''
@@ -2427,6 +2445,25 @@ fi
         with open(stampFile, 'w', encoding='utf-8') as _file:
             _file.write(json.dumps(appBoxData, indent=4))
 
+    def readStampSandbox(self) -> tuple:
+        '''
+        Read the stampSandbox file and return the appBoxData as a tuple.
+        '''
+        stampFile = os.path.join(self.sandboxInstance.getSandboxPath(), '.appBox')
+        if not os.path.exists(stampFile):
+            raise FileNotFoundError(f"Stamp file not found at: {stampFile}")
+
+        with open(stampFile, 'r', encoding='utf-8') as _file:
+            appBoxData = json.load(_file)
+
+        return (
+            appBoxData.get('version'),
+            appBoxData.get('image'),
+            appBoxData.get('createTime'),
+            appBoxData.get('originalSandboxPath'),
+            appBoxData.get('originalUser'),
+            appBoxData.get('originalUIDGID')
+        )
 
 class appBoxManager:
     '''
