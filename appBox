@@ -30,6 +30,7 @@
 #
 
 import argparse
+import atexit
 import base64
 import datetime
 import fcntl
@@ -307,8 +308,7 @@ class downloadTokenAuthenticator:
                                             self.repoURL, "GET", reqPath, headers)
         if status == 200:
             return json.loads(body).get("token")
-        else:
-            raise ConnectionError("Failed to get Quay.io token: %s", str(body))
+        raise ConnectionError(f"Failed to get Quay.io token: {body}")
 
     def _getDownloadTokenDocker(self) -> None:
         '''
@@ -1047,6 +1047,8 @@ class sessionManager:
 
         self.ptyMfd, self.ptySfd = None, None
 
+        atexit.register(self.cleanupSpaces)
+
     def getSandboxPath(self) -> str:
         '''
         Return the path to the sandbox
@@ -1564,7 +1566,8 @@ class sessionManager:
             if process.poll() is None:
                 process.terminate()
             try:
-                os.close(self.ptyMfd)
+                if self.ptyMfd:
+                    os.close(self.ptyMfd)
             except OSError:
                 pass
 
@@ -1589,7 +1592,8 @@ class sessionManager:
         finally:
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
             try:
-                os.close(self.ptyMfd)
+                if self.ptyMfd:
+                    os.close(self.ptyMfd)
             except OSError:
                 pass
 
@@ -1646,7 +1650,8 @@ class sessionManager:
         )
 
         # Close the slave_fd in the parent since it's now handled by the child
-        os.close(self.ptySfd)
+        if self.ptySfd:
+            os.close(self.ptySfd)
 
         # Interact with the master side of the PTY
         try:
@@ -1662,7 +1667,8 @@ class sessionManager:
             pass
         finally:
             try:
-                os.close(self.ptyMfd)
+                if self.ptyMfd:
+                    os.close(self.ptyMfd)
             except OSError:
                 pass
             interactiveProc.wait()
@@ -1764,7 +1770,7 @@ class sessionManager:
         # Unknown
         return 'E'
 
-    def _shellFwdBck(self, interactiveProc : subprocess.PIPE, readable : list) -> bool:
+    def _shellFwdBck(self, interactiveProc : subprocess.Popen, readable : list) -> bool:
         '''
         This is the component for handling sending data in/out of the pty
         '''
@@ -1867,7 +1873,8 @@ class sandboxFixes:
             self.sandboxInstance.removeFromSandBox(
                 os.path.abspath(os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_file)))
             self.sandboxInstance.copyFileFromHost(_file,
-                    os.path.abspath(os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_file)))
+                    os.path.abspath(os.path.join(self.sandboxInstance.getSandboxPath(), '.'+_file)),
+                    overwrite=True)
 
     def fixFilePermissions(self) -> None:
         '''
@@ -2633,7 +2640,8 @@ def runCommand(iManager : imageManager, sandboxPath : str, command : str, asRoot
             raise
         sys.exit(131)
     finally:
-        thisSandbox.cleanupSpaces()
+        if 'thisSandbox' in locals():
+            thisSandbox.cleanupSpaces()
 
 
 def main() -> None:
