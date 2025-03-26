@@ -157,6 +157,9 @@ def bytesToHuman(num_bytes : int) -> str:
 
 
 class downloadTokenAuthenticator:
+    '''
+    Class for authenticating with a Docker Registry
+    '''
 
     def __init__(self, repoURL : str="https://example.com", imagePath : str="project/image"):
         '''
@@ -190,7 +193,9 @@ class downloadTokenAuthenticator:
         return response.status, dict(response.getheaders()), body
 
     def _prompt_for_credentials(self, registry : str) -> tuple:
-        """Prompt user for credentials if not already stored"""
+        '''
+        Prompt user for credentials if not already stored
+        '''
         if registry not in self._credentials:
             print(f"Authentication required for {registry}")
             username = input("Username: ")
@@ -256,7 +261,9 @@ class downloadTokenAuthenticator:
             raise ConnectionError(f'Redirected to: "{response.getheader("Location")}"')
 
     def _getDownloadToken(self) -> None:
-
+        '''
+        This method gets the download token for the registry depending on the repoURL
+        '''
         appLogger.debug("Getting Download Token: %s", self.repoURL)
 
         if "quay.io" in self.repoURL:
@@ -268,11 +275,15 @@ class downloadTokenAuthenticator:
             self._getDownloadTokenDocker()
 
     def _getDownloadTokenGitLab(self) -> None:
-
+        '''
+        This method gets the download token for the registry
+        '''
         raise NotImplementedError("GitLab Authentication is not yet implemented")
 
     def _getDownloadTokenQuay(self) -> None:
-
+        '''
+        This method gets the download token for the registry
+        '''
         appLogger.debug("Getting Quay Download Token")
         reqPath = f"/v2/auth?service=quay.io&scope=repository:{self.imagePath}:pull"
         try:
@@ -335,7 +346,6 @@ class downloadTokenAuthenticator:
         '''
         Get a new token for the registry
         '''
-
         if self.tokenRequired:
             self._getDownloadToken()
         else:
@@ -1800,6 +1810,7 @@ class sandboxFixes:
 
     def __init__(self, addNV : bool, sandboxInstance : sessionManager, iManager : imageManager):
         '''
+        Initialise the class
         '''
 
         self.addNVidia = addNV
@@ -2827,7 +2838,9 @@ def main() -> None:
     return rc
 
 
+# Main entry point
 if __name__ == '__main__':
+
     try:
         RC = main()
     except KeyboardInterrupt as keyboardErr:
