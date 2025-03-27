@@ -33,6 +33,7 @@ import argparse
 import atexit
 import base64
 import datetime
+import errno
 import fcntl
 from functools import wraps
 import http.client
@@ -411,8 +412,7 @@ class imageManager:
         else:
             self.layerCacheFolder = layerCacheFolder
 
-        if not os.path.exists(self.layerCacheFolder):
-            os.makedirs(self.layerCacheFolder)
+        os.makedirs(self.layerCacheFolder, exist_ok=True)
 
         if not installPath:
             self.installPath = os.path.join(os.path.join('/scratch', 'appBox_'+userName), 'sandbox')
@@ -1134,8 +1134,7 @@ class sessionManager:
         if self.rootfs:
             for _layer in self._layers:
                 thisLayer = os.path.join(self.sandboxPath, _layer)
-                if not os.path.exists(thisLayer):
-                    os.makedirs(thisLayer)
+                os.makedirs(thisLayer, exist_ok=True)
 
         backgroundTask='/bin/bash'
         appLogger.debug('Launching host namespace manager')
@@ -1427,8 +1426,7 @@ class sessionManager:
 
             layerPath = os.path.abspath(os.path.join(self.sandboxPath, _layer))
 
-            if not os.path.exists(layerPath):
-                os.makedirs(layerPath)
+            os.makedirs(layerPath, exist_ok=True)
 
             layerPaths.append(layerPath)
 
@@ -1573,18 +1571,33 @@ class sessionManager:
         '''
         Read from the master PTY file descriptor and print to stdout.
         '''
+        sleep_delay = 0.001
+        max_delay = 0.1
         try:
             while not self.terminate_event.is_set():
-                rlist, _, _ = select.select([self.ptyMfd], [], [], 0.1)
+                rlist, _, _ = select.select([self.ptyMfd], [], [], sleep_delay)
                 if self.ptyMfd in rlist:
-                    data = os.read(self.ptyMfd, 1024)
+                    try:
+                        data = os.read(self.ptyMfd, 1024)
+                    except OSError as e:
+                        if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                            data = b''
+                        else:
+                            raise
                     if data:
                         sys.stdout.write(data.decode(errors='replace'))
                         sys.stdout.flush()
+                        # Rese the delay when data is flowing
+                        sleep_delay = 0.001
                     else:
-                        break
+                        # If no data is read, increase the delay gradually
+                        sleep_delay = min(max_delay, sleep_delay * 2)
+                else:
+                    # If no data is read, increase the delay gradually
+                    sleep_delay = min(max_delay, sleep_delay * 2)
                 if process.poll() is not None:
-                    break
+                    # If no data is read, increase the delay gradually
+                    sleep_delay = min(max_delay, sleep_delay * 2)
         except OSError:
             pass
         finally:
@@ -1602,12 +1615,26 @@ class sessionManager:
         Write user input to the master PTY file descriptor.
         '''
         old_settings = termios.tcgetattr(sys.stdin)
+        stdin_fd = sys.stdin.fileno()
+        sleep_delay = 0.001
+        max_delay = 0.1
+
         try:
-            tty.setraw(sys.stdin)
+            tty.setraw(stdin_fd)
+            flags = fcntl.fcntl(stdin_fd, fcntl.F_GETFL)
+            fcntl.fcntl(stdin_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
             while not self.terminate_event.is_set():
-                rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
-                if sys.stdin in rlist:
-                    user_input = os.read(sys.stdin.fileno(), 1024)
+                rlist, _, _ = select.select([stdin_fd], [], [], sleep_delay)
+                if stdin_fd in rlist:
+                    try:
+                        user_input = os.read(stdin_fd, 1024)
+                    except OSError as err:
+                        # If no data available, skip iteration
+                        if err.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                            continue
+                        else:
+                            raise
                     if not user_input:
                         break
                     try:
@@ -1615,13 +1642,18 @@ class sessionManager:
                     except BrokenPipeError:
                         appLogger.debug('Broken pipe while writing to PTY.')
                         self.terminate_event.set()
+                        break
+                    sleep_delay = 0.001
+                else:
+                    sleep_delay = min(max_delay, sleep_delay * 2)
                 if process.poll() is not None:
                     break
-        except OSError:
-            pass
+        except Exception as e:
+            appLogger.debug('Error writing to PTY: %s', e)
+            raise
         finally:
             self.terminate_event.set()
-            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
             try:
                 if self.ptyMfd:
                     os.close(self.ptyMfd)
@@ -1647,6 +1679,9 @@ class sessionManager:
         '''
         # Open a new pseudo-terminal pair
         self.ptyMfd, self.ptySfd = pty.openpty()
+
+        flags = fcntl.fcntl(self.ptyMfd, fcntl.F_GETFL)
+        fcntl.fcntl(self.ptyMfd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
         # Set up signal handler for window resize
         signal.signal(signal.SIGWINCH, self.handle_sigwinch)
@@ -2321,8 +2356,7 @@ class sandboxFixes:
         '''
 
         currentInstance = os.path.abspath(__file__)
-        if not os.path.exists(os.path.join(self.sandboxInstance.sandboxPath, './bin')):
-            os.makedirs(os.path.join(self.sandboxInstance.sandboxPath, './bin'))
+        os.makedirs(os.path.join(self.sandboxInstance.sandboxPath, './bin'), exist_ok=True)
         installInstance = os.path.join(self.sandboxInstance.sandboxPath, './bin/appBox')
 
         self.sandboxInstance.copyFileFromHost(currentInstance, installInstance, overwrite=True)
