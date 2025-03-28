@@ -289,7 +289,11 @@ class downloadTokenAuthenticator:
         '''
         This method gets the download token for the registry
         '''
-        raise NotImplementedError("GitLab Authentication is not yet implemented")
+        appLogger.debug("No explicit GitLab setup _yet_, so assuming something like docherhub will work here...")
+        appLogger.debug("Good Luck(!)")
+        self._getAuthnServiceDocker()
+        self._getDownloadTokenDocker()
+        #raise NotImplementedError("GitLab Authentication is not yet implemented")
 
     def _getDownloadTokenQuay(self) -> None:
         '''
